@@ -205,7 +205,7 @@ static int CALLBACK AboutProc(HWND hwnd, UINT msg,
             char *text = dupprintf
                 ("%s\r\n\r\n%s\r\n\r\n%s",
                  appname, ver,
-                 "\251 " SHORT_COPYRIGHT_DETAILS ". All rights reserved.");
+                 "(c) " SHORT_COPYRIGHT_DETAILS ". All rights reserved.");
             SetDlgItemText(hwnd, IDA_TEXT, text);
 			l10n_created_window (hwnd);
             sfree(text);

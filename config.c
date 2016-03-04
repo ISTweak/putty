@@ -172,6 +172,9 @@ static void config_host_handler(union control *ctrl, void *dlg,
 	     */
 	    dlg_label_change(ctrl, dlg, "Serial line");
 	    dlg_editbox_set(ctrl, dlg, conf_get_str(conf, CONF_serline));
+        } else if (conf_get_int(conf, CONF_protocol) == PROT_CYGTERM) {
+            dlg_label_change(ctrl, dlg, "Command (use - for login shell)");
+            dlg_editbox_set(ctrl, dlg, conf_get_str(conf, CONF_cygcmd));
 	} else if (conf_get_int(conf, CONF_protocol) == PROT_ADB) {
 	    dlg_label_change(ctrl, dlg, "transport type");
 	    dlg_editbox_set(ctrl, dlg, conf_get_str(conf, CONF_adb_transport));
@@ -185,6 +188,8 @@ static void config_host_handler(union control *ctrl, void *dlg,
 	    conf_set_str(conf, CONF_serline, s);
 	else if (conf_get_int(conf, CONF_protocol) == PROT_ADB)
 	    conf_set_str(conf, CONF_adb_transport, s);
+    else if (conf_get_int(conf, CONF_protocol) == PROT_CYGTERM)
+        conf_set_str(conf, CONF_cygcmd, s);
 	else
 	    conf_set_str(conf, CONF_host, s);
 	sfree(s);
@@ -210,6 +215,9 @@ static void config_port_handler(union control *ctrl, void *dlg,
 	     */
 	    dlg_label_change(ctrl, dlg, "Speed");
 	    sprintf(buf, "%d", conf_get_int(conf, CONF_serspeed));
+        } else if (conf_get_int(conf, CONF_protocol) == PROT_CYGTERM) {
+            dlg_label_change(ctrl, dlg, "Port (ignored)");
+            strcpy(buf, "-");
 	} else {
 	    dlg_label_change(ctrl, dlg, PORT_BOX_TITLE);
 	    if (conf_get_int(conf, CONF_port) != 0)
@@ -226,6 +234,8 @@ static void config_port_handler(union control *ctrl, void *dlg,
 
 	if (conf_get_int(conf, CONF_protocol) == PROT_SERIAL)
 	    conf_set_int(conf, CONF_serspeed, i);
+    else if (conf_get_int(conf, CONF_protocol) == PROT_CYGTERM)
+        ;
 	else
 	    conf_set_int(conf, CONF_port, i);
     }

@@ -540,4 +540,11 @@ void win_setup_config_box(struct controlbox *b, HWND *hwndp, int has_help,
 		      conf_checkbox_handler,
 		      I(CONF_adb_kill));
     }
+
+    /*
+     * cygterm back end is available on Windows.
+     */
+    if (!midsession || (protocol == PROT_CYGTERM))
+        cygterm_setup_config_box(b, midsession);
+
 }

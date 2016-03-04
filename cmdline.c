@@ -228,6 +228,13 @@ int cmdline_process_param(const char *p, char *value,
 	default_protocol = PROT_ADB;
 	conf_set_int(conf, CONF_protocol, default_protocol);
     }
+    if (!strcmp(p, "-cygterm")) {
+        RETURN(1);
+        UNAVAILABLE_IN(TOOLTYPE_FILETRANSFER | TOOLTYPE_NONNETWORK);
+        default_protocol = PROT_CYGTERM;
+        conf_set_int(conf, CONF_protocol, default_protocol);
+        return 1;
+    }
     if (!strcmp(p, "-v")) {
 	RETURN(1);
 	flags |= FLAG_VERBOSE;
