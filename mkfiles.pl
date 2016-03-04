@@ -713,6 +713,9 @@ if (defined $makefiles{'vc'}) {
       "\t-del \$(BUILDDIR)*.plg\n".
       "\t-del \$(BUILDDIR)*.map\n".
       "\t-del \$(BUILDDIR)*.idb\n".
+      "\t-del \$(BUILDDIR)*.pgc\n".
+      "\t-del \$(BUILDDIR)*.pgd\n".
+      "\t-del \$(BUILDDIR)*.rnd\n".
       "\t-del \$(BUILDDIR)debug.log\n";
     select STDOUT; close OUT;
 }
