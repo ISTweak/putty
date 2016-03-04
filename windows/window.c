@@ -949,26 +949,26 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	    m = popup_menus[j].menu;
 
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
-	    AppendMenu(m, MF_ENABLED, IDM_SHOWLOG, "&Event Log");
+	    AppendMenu(m, MF_ENABLED, IDM_SHOWLOG, l10n_dupstr("&Event Log"));
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
-	    AppendMenu(m, MF_ENABLED, IDM_NEWSESS, "Ne&w Session...");
-	    AppendMenu(m, MF_ENABLED, IDM_DUPSESS, "&Duplicate Session");
+	    AppendMenu(m, MF_ENABLED, IDM_NEWSESS, l10n_dupstr("Ne&w Session..."));
+	    AppendMenu(m, MF_ENABLED, IDM_DUPSESS, l10n_dupstr("&Duplicate Session"));
 	    AppendMenu(m, MF_POPUP | MF_ENABLED, (UINT) savedsess_menu,
-		       "Sa&ved Sessions");
-	    AppendMenu(m, MF_ENABLED, IDM_RECONF, "Chan&ge Settings...");
+		       l10n_dupstr("Sa&ved Sessions"));
+	    AppendMenu(m, MF_ENABLED, IDM_RECONF, l10n_dupstr("Chan&ge Settings..."));
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
-	    AppendMenu(m, MF_ENABLED, IDM_COPYALL, "C&opy All to Clipboard");
-	    AppendMenu(m, MF_ENABLED, IDM_CLRSB, "C&lear Scrollback");
-	    AppendMenu(m, MF_ENABLED, IDM_RESET, "Rese&t Terminal");
+	    AppendMenu(m, MF_ENABLED, IDM_COPYALL, l10n_dupstr("C&opy All to Clipboard"));
+	    AppendMenu(m, MF_ENABLED, IDM_CLRSB, l10n_dupstr("C&lear Scrollback"));
+	    AppendMenu(m, MF_ENABLED, IDM_RESET, l10n_dupstr("Rese&t Terminal"));
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
 	    AppendMenu(m, (conf_get_int(conf, CONF_resize_action)
 			   == RESIZE_DISABLED) ? MF_GRAYED : MF_ENABLED,
-		       IDM_FULLSCREEN, "&Full Screen");
+		       IDM_FULLSCREEN, l10n_dupstr("&Full Screen"));
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
 	    if (has_help())
-		AppendMenu(m, MF_ENABLED, IDM_HELP, "&Help");
+		AppendMenu(m, MF_ENABLED, IDM_HELP, l10n_dupstr("&Help"));
 	    str = dupprintf("&About %s", appname);
-	    AppendMenu(m, MF_ENABLED, IDM_ABOUT, str);
+	    AppendMenu(m, MF_ENABLED, IDM_ABOUT, l10n_dupstr(str));
 	    sfree(str);
 	}
     }

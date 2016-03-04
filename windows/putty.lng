@@ -332,6 +332,7 @@ Bugs=バグ
 Workarounds for SSH server bugs=SSH サーバのバグの回避法
 Detection of known bugs in SSH servers=SSH サーバの既知のバグの検出
 Help=ヘルプ
+&Help=ヘルプ(&H)
 ｩ 1997-2007 Simon Tatham. All rights reserved.=(C) 1997-2007 Simon Tatham. All rights reserved.
 Copyright ｩ 1997-2007 Simon Tatham=Copyright (C) 1997-2007 Simon Tatham
 Make default system alert sound=デフォルトのシステムアラートサウンドを鳴らす
