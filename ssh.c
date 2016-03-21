@@ -11,6 +11,7 @@
 
 #include "putty.h"
 #include "tree234.h"
+#include "storage.h"
 #include "ssh.h"
 #ifndef NO_GSSAPI
 #include "sshgssc.h"
@@ -954,6 +955,24 @@ struct ssh_tag {
      */
     struct ssh_gss_liblist *gsslibs;
 #endif
+
+    /*
+     * The last list returned from get_specials.
+     */
+    struct telnet_special *specials;
+
+    /*
+     * List of host key algorithms for which we _don't_ have a stored
+     * host key. These are indices into the main hostkey_algs[] array
+     */
+    int uncert_hostkeys[lenof(hostkey_algs)];
+    int n_uncert_hostkeys;
+
+    /*
+     * Flag indicating that the current rekey is intended to finish
+     * with a newly cross-certified host key.
+     */
+    int cross_certifying;
 };
 
 #define logevent(s) logevent(ssh->frontend, s)
@@ -6670,6 +6689,27 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 		     kexlist_descr[i], len, str));
 	    crStopV;
 	  matched:;
+
+            if (i == KEXLIST_HOSTKEY) {
+                int j;
+
+                /*
+                 * In addition to deciding which host key we're
+                 * actually going to use, we should make a list of the
+                 * host keys offered by the server which we _don't_
+                 * have cached. These will be offered as cross-
+                 * certification options by ssh_get_specials.
+                 */
+                ssh->n_uncert_hostkeys = 0;
+
+                for (j = 0; j < lenof(hostkey_algs); j++) {
+                    if (in_commasep_string(hostkey_algs[j]->name, str, len) &&
+                        !have_ssh_host_key(ssh->savedhost, ssh->savedport,
+                                           hostkey_algs[j]->keytype)) {
+                        ssh->uncert_hostkeys[ssh->n_uncert_hostkeys++] = j;
+                    }
+                }
+            }
 	}
 
 	if (s->pending_compression) {
@@ -7175,6 +7215,18 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
         /*
          * Save this host key, to check against the one presented in
          * subsequent rekeys.
+         */
+        ssh->hostkey_str = s->keystr;
+    } else if (ssh->cross_certifying) {
+        s->fingerprint = ssh2_fingerprint(ssh->hostkey, s->hkey);
+        logevent("Storing additional host key for this host:");
+        logevent(s->fingerprint);
+        store_host_key(ssh->savedhost, ssh->savedport,
+                       ssh->hostkey->keytype, s->keystr);
+        ssh->cross_certifying = FALSE;
+        /*
+         * Don't forget to store the new key as the one we'll be
+         * re-checking in future normal rekeys.
          */
         ssh->hostkey_str = s->keystr;
     } else {
@@ -11004,6 +11056,9 @@ static const char *ssh_init(void *frontend_handle, void **backend_handle,
     ssh->connshare = NULL;
     ssh->attempting_connshare = FALSE;
     ssh->session_started = FALSE;
+    ssh->specials = NULL;
+    ssh->n_uncert_hostkeys = 0;
+    ssh->cross_certifying = FALSE;
 
     *backend_handle = ssh;
 
@@ -11151,6 +11206,7 @@ static void ssh_free(void *handle)
     sfree(ssh->v_s);
     sfree(ssh->fullhostname);
     sfree(ssh->hostkey_str);
+    sfree(ssh->specials);
     if (ssh->crcda_ctx) {
 	crcda_free_context(ssh->crcda_ctx);
 	ssh->crcda_ctx = NULL;
@@ -11364,19 +11420,24 @@ static const struct telnet_special *ssh_get_specials(void *handle)
     static const struct telnet_special specials_end[] = {
 	{NULL, TS_EXITMENU}
     };
-    /* XXX review this length for any changes: */
-    static struct telnet_special ssh_specials[lenof(ssh2_ignore_special) +
-					      lenof(ssh2_rekey_special) +
-					      lenof(ssh2_session_specials) +
-					      lenof(specials_end)];
+
+    struct telnet_special *specials = NULL;
+    int nspecials = 0, specialsize = 0;
+
     Ssh ssh = (Ssh) handle;
-    int i = 0;
-#define ADD_SPECIALS(name) \
-    do { \
-	assert((i + lenof(name)) <= lenof(ssh_specials)); \
-	memcpy(&ssh_specials[i], name, sizeof name); \
-	i += lenof(name); \
-    } while(0)
+
+    sfree(ssh->specials);
+
+#define ADD_SPECIALS(name) do                                           \
+    {                                                                   \
+        int len = lenof(name);                                          \
+        if (nspecials + len > specialsize) {                            \
+            specialsize = (nspecials + len) * 5 / 4 + 32;               \
+            specials = sresize(specials, specialsize, struct telnet_special); \
+        }                                                               \
+	memcpy(specials+nspecials, name, len*sizeof(struct telnet_special)); \
+        nspecials += len;                                               \
+    } while (0)
 
     if (ssh->version == 1) {
 	/* Don't bother offering IGNORE if we've decided the remote
@@ -11391,11 +11452,37 @@ static const struct telnet_special *ssh_get_specials(void *handle)
 	    ADD_SPECIALS(ssh2_rekey_special);
 	if (ssh->mainchan)
 	    ADD_SPECIALS(ssh2_session_specials);
+
+        if (ssh->n_uncert_hostkeys) {
+            static const struct telnet_special uncert_start[] = {
+                {NULL, TS_SEP},
+                {"Cache new host key type", TS_SUBMENU},
+            };
+            static const struct telnet_special uncert_end[] = {
+                {NULL, TS_EXITMENU},
+            };
+            int i;
+
+            ADD_SPECIALS(uncert_start);
+            for (i = 0; i < ssh->n_uncert_hostkeys; i++) {
+                struct telnet_special uncert[1];
+                const struct ssh_signkey *alg =
+                    hostkey_algs[ssh->uncert_hostkeys[i]];
+                uncert[0].name = alg->name;
+                uncert[0].code = TS_LOCALSTART + i;
+                ADD_SPECIALS(uncert);
+            }
+            ADD_SPECIALS(uncert_end);
+        }
     } /* else we're not ready yet */
 
-    if (i) {
+    if (nspecials)
 	ADD_SPECIALS(specials_end);
-	return ssh_specials;
+
+    ssh->specials = specials;
+
+    if (nspecials) {
+        return specials;
     } else {
 	return NULL;
     }
@@ -11446,6 +11533,13 @@ static void ssh_special(void *handle, Telnet_Special code)
 	if (!ssh->kex_in_progress && !ssh->bare_connection &&
             ssh->version == 2) {
 	    do_ssh2_transport(ssh, "at user request", -1, NULL);
+	}
+    } else if (code >= TS_LOCALSTART) {
+        ssh->hostkey = hostkey_algs[code - TS_LOCALSTART];
+        ssh->cross_certifying = TRUE;
+	if (!ssh->kex_in_progress && !ssh->bare_connection &&
+            ssh->version == 2) {
+	    do_ssh2_transport(ssh, "cross-certifying new host key", -1, NULL);
 	}
     } else if (code == TS_BRK) {
 	if (ssh->state == SSH_STATE_CLOSED
