@@ -335,6 +335,18 @@ enum {
 
 enum {
     /*
+     * SSH-2 host key algorithms
+     */
+    HK_WARN,
+    HK_RSA,
+    HK_DSA,
+    HK_ECDSA,
+    HK_ED25519,
+    HK_MAX
+};
+
+enum {
+    /*
      * SSH ciphers (both SSH-1 and SSH-2)
      */
     CIPHER_WARN,		       /* pseudo 'cipher' */
@@ -686,8 +698,8 @@ void free_prompts(prompts_t *p);
  * Exports from the front end.
  */
 void request_resize(void *frontend, int, int);
-void do_text(Context, int, int, wchar_t *, int, unsigned long long, int);
-void do_cursor(Context, int, int, wchar_t *, int, unsigned long long, int);
+void do_text(Context, int, int, wchar_t *, int, unsigned long, int);
+void do_cursor(Context, int, int, wchar_t *, int, unsigned long, int);
 int char_width(Context ctx, int uc);
 #ifdef OPTIMISE_SCROLL
 void do_scroll(Context, int, int, int);
@@ -800,6 +812,7 @@ void cleanup_exit(int);
     X(INT, NONE, nopty) \
     X(INT, NONE, compression) \
     X(INT, INT, ssh_kexlist) \
+    X(INT, INT, ssh_hklist) \
     X(INT, NONE, ssh_rekey_time) /* in minutes */ \
     X(STR, NONE, ssh_rekey_data) /* string encoding e.g. "100K", "2M", "1G" */ \
     X(INT, NONE, tryagent) \
@@ -1379,10 +1392,17 @@ int verify_ssh_host_key(void *frontend, char *host, int port,
  */
 int have_ssh_host_key(const char *host, int port, const char *keytype);
 /*
- * askalg has the same set of return values as verify_ssh_host_key.
+ * askalg and askhk have the same set of return values as
+ * verify_ssh_host_key.
+ *
+ * (askhk is used in the case where we're using a host key below the
+ * warning threshold because that's all we have cached, but at least
+ * one acceptable algorithm is available that we don't have cached.)
  */
 int askalg(void *frontend, const char *algtype, const char *algname,
 	   void (*callback)(void *ctx, int result), void *ctx);
+int askhk(void *frontend, const char *algname, const char *betteralgs,
+          void (*callback)(void *ctx, int result), void *ctx);
 /*
  * askappend can return four values:
  * 
@@ -1492,7 +1512,7 @@ void filename_free(Filename *fn);
 int filename_serialise(const Filename *f, void *data);
 Filename *filename_deserialise(void *data, int maxsize, int *used);
 char *get_username(void);	       /* return value needs freeing */
-char *get_random_data(int bytes);      /* used in cmdgen.c */
+char *get_random_data(int bytes, const char *device); /* used in cmdgen.c */
 char filename_char_sanitise(char c);   /* rewrite special pathname chars */
 void exec_browser(char *url);
 

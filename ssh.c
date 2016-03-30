@@ -408,16 +408,23 @@ static void ssh2_msg_something_unimplemented(Ssh ssh, struct Packet *pktin);
 #define OUR_V2_MAXPKT 0x4000UL
 #define OUR_V2_PACKETLIMIT 0x9000UL
 
-const static struct ssh_signkey *hostkey_algs[] = {
-    &ssh_ecdsa_ed25519,
-    &ssh_ecdsa_nistp256, &ssh_ecdsa_nistp384, &ssh_ecdsa_nistp521,
-    &ssh_rsa, &ssh_dss
+struct ssh_signkey_with_user_pref_id {
+    const struct ssh_signkey *alg;
+    int id;
+};
+const static struct ssh_signkey_with_user_pref_id hostkey_algs[] = {
+    { &ssh_ecdsa_ed25519, HK_ED25519 },
+    { &ssh_ecdsa_nistp256, HK_ECDSA },
+    { &ssh_ecdsa_nistp384, HK_ECDSA },
+    { &ssh_ecdsa_nistp521, HK_ECDSA },
+    { &ssh_dss, HK_DSA },
+    { &ssh_rsa, HK_RSA },
 };
 
-const static struct ssh_mac *macs[] = {
+const static struct ssh_mac *const macs[] = {
     &ssh_hmac_sha256, &ssh_hmac_sha1, &ssh_hmac_sha1_96, &ssh_hmac_md5
 };
-const static struct ssh_mac *buggymacs[] = {
+const static struct ssh_mac *const buggymacs[] = {
     &ssh_hmac_sha1_buggy, &ssh_hmac_sha1_96_buggy, &ssh_hmac_md5
 };
 
@@ -444,7 +451,7 @@ const static struct ssh_compress ssh_comp_none = {
     ssh_comp_none_disable, NULL
 };
 extern const struct ssh_compress ssh_zlib;
-const static struct ssh_compress *compressions[] = {
+const static struct ssh_compress *const compressions[] = {
     &ssh_zlib, &ssh_comp_none
 };
 
@@ -6242,7 +6249,10 @@ struct kexinit_algorithm {
 	    const struct ssh_kex *kex;
 	    int warn;
 	} kex;
+	struct {
 	const struct ssh_signkey *hostkey;
+            int warn;
+        } hk;
 	struct {
 	    const struct ssh2_cipher *cipher;
 	    int warn;
@@ -6297,12 +6307,12 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	"server-to-client compression method" };
     struct do_ssh2_transport_state {
 	int crLine;
-	int nbits, pbits, warn_kex, warn_cscipher, warn_sccipher;
+	int nbits, pbits, warn_kex, warn_hk, warn_cscipher, warn_sccipher;
 	Bignum p, g, e, f, K;
 	void *our_kexinit;
 	int our_kexinitlen;
 	int kex_init_value, kex_reply_value;
-	const struct ssh_mac **maclist;
+	const struct ssh_mac *const *maclist;
 	int nmacs;
 	const struct ssh2_cipher *cscipher_tobe;
 	const struct ssh2_cipher *sccipher_tobe;
@@ -6319,6 +6329,8 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	unsigned char exchange_hash[SSH2_KEX_MAX_HASH_LEN];
 	int n_preferred_kex;
 	const struct ssh_kexes *preferred_kex[KEX_MAX];
+	int n_preferred_hk;
+	int preferred_hk[HK_MAX];
 	int n_preferred_ciphers;
 	const struct ssh2_ciphers *preferred_ciphers[CIPHER_MAX];
 	const struct ssh_compress *preferred_comp;
@@ -6393,6 +6405,20 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 		}
 		break;
 	    }
+	}
+
+	/*
+	 * Set up the preferred host key types. These are just the ids
+	 * in the enum in putty.h, so 'warn below here' is indicated
+	 * by HK_WARN.
+	 */
+	s->n_preferred_hk = 0;
+	for (i = 0; i < HK_MAX; i++) {
+            int id = conf_get_int_int(ssh->conf, CONF_ssh_hklist, i);
+            /* As above, don't bother with HK_WARN if it's last in the
+             * list */
+	    if (id != HK_WARN || i < HK_MAX - 1)
+                s->preferred_hk[s->n_preferred_hk++] = id;
 	}
 
 	/*
@@ -6471,19 +6497,42 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
              * In the first key exchange, we list all the algorithms
              * we're prepared to cope with, but prefer those algorithms
 	     * for which we have a host key for this host.
+             *
+             * If the host key algorithm is below the warning
+             * threshold, we warn even if we did already have a key
+             * for it, on the basis that if the user has just
+             * reconfigured that host key type to be warned about,
+             * they surely _do_ want to be alerted that a server
+             * they're actually connecting to is using it.
              */
-            for (i = 0; i < lenof(hostkey_algs); i++) {
+            warn = FALSE;
+            for (i = 0; i < s->n_preferred_hk; i++) {
+                if (s->preferred_hk[i] == HK_WARN)
+                    warn = TRUE;
+                for (j = 0; j < lenof(hostkey_algs); j++) {
+                    if (hostkey_algs[j].id != s->preferred_hk[i])
+                        continue;
 		if (have_ssh_host_key(ssh->savedhost, ssh->savedport,
-				      hostkey_algs[i]->keytype)) {
+                                          hostkey_algs[j].alg->keytype)) {
 		    alg = ssh2_kexinit_addalg(s->kexlists[KEXLIST_HOSTKEY],
-					      hostkey_algs[i]->name);
-		    alg->u.hostkey = hostkey_algs[i];
+                                                  hostkey_algs[j].alg->name);
+                        alg->u.hk.hostkey = hostkey_algs[j].alg;
+                        alg->u.hk.warn = warn;
 		}
 	    }
-            for (i = 0; i < lenof(hostkey_algs); i++) {
+	    }
+            warn = FALSE;
+            for (i = 0; i < s->n_preferred_hk; i++) {
+                if (s->preferred_hk[i] == HK_WARN)
+                    warn = TRUE;
+                for (j = 0; j < lenof(hostkey_algs); j++) {
+                    if (hostkey_algs[j].id != s->preferred_hk[i])
+                        continue;
 		alg = ssh2_kexinit_addalg(s->kexlists[KEXLIST_HOSTKEY],
-					  hostkey_algs[i]->name);
-		alg->u.hostkey = hostkey_algs[i];
+                                              hostkey_algs[j].alg->name);
+                    alg->u.hk.hostkey = hostkey_algs[j].alg;
+                    alg->u.hk.warn = warn;
+                }
 	    }
         } else {
             /*
@@ -6496,7 +6545,8 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
             assert(ssh->kex);
 	    alg = ssh2_kexinit_addalg(s->kexlists[KEXLIST_HOSTKEY],
 				      ssh->hostkey->name);
-	    alg->u.hostkey = ssh->hostkey;
+	    alg->u.hk.hostkey = ssh->hostkey;
+            alg->u.hk.warn = FALSE;
         }
 	/* List encryption algorithms (client->server then server->client). */
 	for (k = KEXLIST_CSCIPHER; k <= KEXLIST_SCCIPHER; k++) {
@@ -6617,7 +6667,8 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	s->scmac_tobe = NULL;
 	s->cscomp_tobe = NULL;
 	s->sccomp_tobe = NULL;
-	s->warn_kex = s->warn_cscipher = s->warn_sccipher = FALSE;
+	s->warn_kex = s->warn_hk = FALSE;
+        s->warn_cscipher = s->warn_sccipher = FALSE;
 
 	pktin->savedpos += 16;	        /* skip garbage cookie */
 
@@ -6661,7 +6712,8 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 			ssh->kex = alg->u.kex.kex;
 			s->warn_kex = alg->u.kex.warn;
 		    } else if (i == KEXLIST_HOSTKEY) {
-			ssh->hostkey = alg->u.hostkey;
+			ssh->hostkey = alg->u.hk.hostkey;
+                        s->warn_hk = alg->u.hk.warn;
 		    } else if (i == KEXLIST_CSCIPHER) {
 			s->cscipher_tobe = alg->u.cipher.cipher;
 			s->warn_cscipher = alg->u.cipher.warn;
@@ -6685,7 +6737,7 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 		    in_commasep_string(alg->u.comp->delayed_name, str, len))
 		    s->pending_compression = TRUE;  /* try this later */
 	    }
-	    bombout(("Couldn't agree a %s ((available: %.*s)",
+	    bombout(("Couldn't agree a %s (available: %.*s)",
 		     kexlist_descr[i], len, str));
 	    crStopV;
 	  matched:;
@@ -6699,13 +6751,19 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
                  * host keys offered by the server which we _don't_
                  * have cached. These will be offered as cross-
                  * certification options by ssh_get_specials.
+                 *
+                 * We also count the key we're currently using for KEX
+                 * as one we've already got, because by the time this
+                 * menu becomes visible, it will be.
                  */
                 ssh->n_uncert_hostkeys = 0;
 
                 for (j = 0; j < lenof(hostkey_algs); j++) {
-                    if (in_commasep_string(hostkey_algs[j]->name, str, len) &&
+                    if (hostkey_algs[j].alg != ssh->hostkey &&
+                        in_commasep_string(hostkey_algs[j].alg->name,
+                                           str, len) &&
                         !have_ssh_host_key(ssh->savedhost, ssh->savedport,
-                                           hostkey_algs[j]->keytype)) {
+                                           hostkey_algs[j].alg->keytype)) {
                         ssh->uncert_hostkeys[ssh->n_uncert_hostkeys++] = j;
                     }
                 }
@@ -6749,6 +6807,73 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	    ssh_set_frozen(ssh, 0);
 	    if (s->dlgret == 0) {
 		ssh_disconnect(ssh, "User aborted at kex warning", NULL,
+			       0, TRUE);
+		crStopV;
+	    }
+	}
+
+	if (s->warn_hk) {
+            int j, k;
+            char *betteralgs;
+
+	    ssh_set_frozen(ssh, 1);
+
+            /*
+             * Change warning box wording depending on why we chose a
+             * warning-level host key algorithm. If it's because
+             * that's all we have *cached*, use the askhk mechanism,
+             * and list the host keys we could usefully cross-certify.
+             * Otherwise, use askalg for the standard wording.
+             */
+            betteralgs = NULL;
+            for (j = 0; j < ssh->n_uncert_hostkeys; j++) {
+                const struct ssh_signkey_with_user_pref_id *hktype =
+                    &hostkey_algs[ssh->uncert_hostkeys[j]];
+                int better = FALSE;
+                for (k = 0; k < HK_MAX; k++) {
+                    int id = conf_get_int_int(ssh->conf, CONF_ssh_hklist, k);
+                    if (id == HK_WARN) {
+                        break;
+                    } else if (id == hktype->id) {
+                        better = TRUE;
+                        break;
+                    }
+                }
+                if (better) {
+                    if (betteralgs) {
+                        char *old_ba = betteralgs;
+                        betteralgs = dupcat(betteralgs, ",",
+                                            hktype->alg->name,
+                                            (const char *)NULL);
+                        sfree(old_ba);
+                    } else {
+                        betteralgs = dupstr(hktype->alg->name);
+                    }
+                }
+            }
+            if (betteralgs) {
+                s->dlgret = askhk(ssh->frontend, ssh->hostkey->name,
+                                  betteralgs, ssh_dialog_callback, ssh);
+                sfree(betteralgs);
+            } else {
+                s->dlgret = askalg(ssh->frontend, "host key type",
+                                   ssh->hostkey->name,
+                                   ssh_dialog_callback, ssh);
+            }
+	    if (s->dlgret < 0) {
+		do {
+		    crReturnV;
+		    if (pktin) {
+			bombout(("Unexpected data from server while"
+				 " waiting for user response"));
+			crStopV;
+		    }
+		} while (pktin || inlen > 0);
+		s->dlgret = ssh->user_response;
+	    }
+	    ssh_set_frozen(ssh, 0);
+	    if (s->dlgret == 0) {
+		ssh_disconnect(ssh, "User aborted at host key warning", NULL,
 			       0, TRUE);
 		crStopV;
 	    }
@@ -7171,6 +7296,40 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
     s->keystr = ssh->hostkey->fmtkey(s->hkey);
     if (!s->got_session_id) {
         /*
+	 * Make a note of any other host key formats that are available.
+	 */
+	{
+	    int i, j;
+	    char *list = NULL;
+	    for (i = 0; i < lenof(hostkey_algs); i++) {
+		if (hostkey_algs[i].alg == ssh->hostkey)
+		    continue;
+
+                for (j = 0; j < ssh->n_uncert_hostkeys; j++)
+                    if (ssh->uncert_hostkeys[j] == i)
+                        break;
+
+                if (j < ssh->n_uncert_hostkeys) {
+		    char *newlist;
+		    if (list)
+			newlist = dupprintf("%s/%s", list,
+					    hostkey_algs[i].alg->name);
+		    else
+			newlist = dupprintf("%s", hostkey_algs[i].alg->name);
+		    sfree(list);
+		    list = newlist;
+		}
+	    }
+	    if (list) {
+		logeventf(ssh,
+			  "Server also has %s host key%s, but we "
+			  "don't know %s", list,
+			  j > 1 ? "s" : "", j > 1 ? "any of them" : "it");
+		sfree(list);
+	    }
+	}
+
+        /*
          * Authenticate remote host: verify host key. (We've already
          * checked the signature of the exchange hash.)
          */
@@ -7414,6 +7573,12 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
      * Free shared secret.
      */
     freebn(s->K);
+
+    /*
+     * Update the specials menu to list the remaining uncertified host
+     * keys.
+     */
+    update_specials_menu(ssh->frontend);
 
     /*
      * Key exchange is over. Loop straight back round if we have a
@@ -11467,9 +11632,9 @@ static const struct telnet_special *ssh_get_specials(void *handle)
             for (i = 0; i < ssh->n_uncert_hostkeys; i++) {
                 struct telnet_special uncert[1];
                 const struct ssh_signkey *alg =
-                    hostkey_algs[ssh->uncert_hostkeys[i]];
+                    hostkey_algs[ssh->uncert_hostkeys[i]].alg;
                 uncert[0].name = alg->name;
-                uncert[0].code = TS_LOCALSTART + i;
+                uncert[0].code = TS_LOCALSTART + ssh->uncert_hostkeys[i];
                 ADD_SPECIALS(uncert);
             }
             ADD_SPECIALS(uncert_end);
@@ -11535,7 +11700,7 @@ static void ssh_special(void *handle, Telnet_Special code)
 	    do_ssh2_transport(ssh, "at user request", -1, NULL);
 	}
     } else if (code >= TS_LOCALSTART) {
-        ssh->hostkey = hostkey_algs[code - TS_LOCALSTART];
+        ssh->hostkey = hostkey_algs[code - TS_LOCALSTART].alg;
         ssh->cross_certifying = TRUE;
 	if (!ssh->kex_in_progress && !ssh->bare_connection &&
             ssh->version == 2) {

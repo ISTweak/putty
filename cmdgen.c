@@ -19,7 +19,7 @@
 #ifdef TEST_CMDGEN
 /*
  * This section overrides some definitions below for test purposes.
- * When compiled with -DTEST_CMDGEN:
+ * When compiled with -DTEST_CMDGEN (as cgtest.c will do):
  * 
  *  - Calls to get_random_data() are replaced with the diagnostic
  *    function below (I #define the name so that I can still link
@@ -37,7 +37,7 @@
  *    run tests.
  */
 #define get_random_data get_random_data_diagnostic
-char *get_random_data(int len)
+char *get_random_data(int len, const char *device)
 {
     char *buf = snewn(len, char);
     memset(buf, 'x', len);
@@ -52,8 +52,7 @@ int console_get_userpass_input(prompts_t *p, unsigned char *in, int inlen)
     int ret = 1;
     for (i = 0; i < p->n_prompts; i++) {
 	if (promptsgot < nprompts) {
-	    assert(strlen(prompts[promptsgot]) < p->prompts[i]->result_len);
-	    strcpy(p->prompts[i]->result, prompts[promptsgot++]);
+	    p->prompts[i]->result = dupstr(prompts[promptsgot++]);
 	} else {
 	    promptsgot++;	    /* track number of requests anyway */
 	    ret = 0;
@@ -177,6 +176,8 @@ void help(void)
 	    "        specify file containing old key passphrase\n"
 	    "  --new-passphrase file\n"
 	    "        specify file containing new key passphrase\n"
+	    "  --random-device device\n"
+	    "        specify device to read entropy from (e.g. /dev/urandom)\n"
 	    );
 }
 
@@ -245,6 +246,7 @@ int main(int argc, char **argv)
     char *old_passphrase = NULL, *new_passphrase = NULL;
     int load_encrypted;
     progfn_t progressfn = is_interactive() ? progress_update : no_progress;
+    const char *random_device = NULL;
 
     /* ------------------------------------------------------------------
      * Parse the command line to figure out what we've been asked to do.
@@ -337,6 +339,16 @@ int main(int argc, char **argv)
 				new_passphrase = readpassphrase(val);
 				if (!new_passphrase)
 				    errs = TRUE;
+			    }
+			} else if (!strcmp(opt, "-random-device")) {
+			    if (!val && argc > 1)
+				--argc, val = *++argv;
+			    if (!val) {
+				errs = TRUE;
+				fprintf(stderr, "puttygen: option `-%s'"
+					" expects an argument\n", opt);
+			    } else {
+                                random_device = val;
 			    }
 			} else {
 			    errs = TRUE;
@@ -501,6 +513,14 @@ int main(int argc, char **argv)
     if (keytype == ED25519 && (bits != 256)) {
         fprintf(stderr, "puttygen: invalid bits for ED25519, choose 256\n");
         errs = TRUE;
+    }
+
+    if (keytype == RSA2 || keytype == RSA1 || keytype == DSA) {
+        if (bits < 256) {
+            fprintf(stderr, "puttygen: cannot generate %s keys shorter than"
+                    " 256 bits\n", (keytype == DSA ? "DSA" : "RSA"));
+            errs = TRUE;
+        }
     }
 
     if (errs)
@@ -677,7 +697,7 @@ int main(int argc, char **argv)
 	    strftime(default_comment, 30, "rsa-key-%Y%m%d", &tm);
 
 	random_ref();
-	entropy = get_random_data(bits / 8);
+	entropy = get_random_data(bits / 8, random_device);
 	if (!entropy) {
 	    fprintf(stderr, "puttygen: failed to collect entropy, "
 		    "could not generate key\n");
@@ -1180,7 +1200,7 @@ char *cleanup_fp(char *s)
     s += strspn(s, " \n\t");
     s += strcspn(s, " \n\t");
 
-    return dupprintf("%.*s", s - p, p);
+    return dupprintf("%.*s", (int)(s - p), p);
 }
 
 char *get_fp(char *filename)

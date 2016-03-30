@@ -10,8 +10,8 @@
 
 /* The cipher order given here is the default order. */
 static const struct keyvalwhere ciphernames[] = {
-    { "chacha20",   CIPHER_CHACHA20,        -1, -1 },
     { "aes",        CIPHER_AES,             -1, -1 },
+    { "chacha20",   CIPHER_CHACHA20,        CIPHER_AES, +1 },
     { "blowfish",   CIPHER_BLOWFISH,        -1, -1 },
     { "3des",       CIPHER_3DES,            -1, -1 },
     { "WARN",       CIPHER_WARN,            -1, -1 },
@@ -26,6 +26,14 @@ static const struct keyvalwhere kexnames[] = {
     { "dh-group1-sha1",     KEX_DHGROUP1,   -1, -1 },
     { "rsa",                KEX_RSA,        KEX_WARN, -1 },
     { "WARN",               KEX_WARN,       -1, -1 }
+};
+
+static const struct keyvalwhere hknames[] = {
+    { "ed25519",    HK_ED25519,             -1, +1 },
+    { "ecdsa",      HK_ECDSA,               -1, -1 },
+    { "dsa",        HK_DSA,                 -1, -1 },
+    { "rsa",        HK_RSA,                 -1, -1 },
+    { "WARN",       HK_WARN,                -1, -1 },
 };
 
 /*
@@ -378,6 +386,7 @@ static void gprefs(void *sesskey, const char *name, const char *def,
                     conf_set_int_int(conf, primary, j+1,
                                      conf_get_int_int(conf, primary, j));
                 conf_set_int_int(conf, primary, pos, mapping[i].v);
+                seen |= (1 << mapping[i].v);
                 n++;
             }
         }
@@ -493,6 +502,7 @@ void save_open_settings(void *sesskey, Conf *conf)
     write_setting_i(sesskey, "ChangeUsername", conf_get_int(conf, CONF_change_username));
     wprefs(sesskey, "Cipher", ciphernames, CIPHER_MAX, conf, CONF_ssh_cipherlist);
     wprefs(sesskey, "KEX", kexnames, KEX_MAX, conf, CONF_ssh_kexlist);
+    wprefs(sesskey, "HostKey", hknames, HK_MAX, conf, CONF_ssh_hklist);
     write_setting_i(sesskey, "RekeyTime", conf_get_int(conf, CONF_ssh_rekey_time));
     write_setting_s(sesskey, "RekeyBytes", conf_get_str(conf, CONF_ssh_rekey_data));
     write_setting_i(sesskey, "SshNoAuth", conf_get_int(conf, CONF_ssh_no_userauth));
@@ -841,6 +851,8 @@ void load_open_settings(void *sesskey, Conf *conf)
 	gprefs(sesskey, "KEX", default_kexes,
 	       kexnames, KEX_MAX, conf, CONF_ssh_kexlist);
     }
+    gprefs(sesskey, "HostKey", "ed25519,ecdsa,rsa,dsa,WARN",
+           hknames, HK_MAX, conf, CONF_ssh_hklist);
     gppi(sesskey, "RekeyTime", 60, conf, CONF_ssh_rekey_time);
     gpps(sesskey, "RekeyBytes", "1G", conf, CONF_ssh_rekey_data);
     /* SSH-2 only by default */

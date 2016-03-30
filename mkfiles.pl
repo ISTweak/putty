@@ -135,7 +135,7 @@ while (<IN>) {
     } elsif (($i =~ /^\[([A-Z]*)\]$/) and defined $prog) {
       $type = substr($i,1,(length $i)-2);
       die "unrecognised program type for $prog [$type]\n"
-          if ! grep { $type eq $_ } qw(G C X U MX UT);
+          if ! grep { $type eq $_ } qw(G C X U MX XT UT);
     } else {
       push @$listref, $i;
     }
@@ -1360,7 +1360,7 @@ if (defined $makefiles{'gtk'}) {
     "# building with GTK 1.2, or you can set it to `pkg-config gtk+-2.0 x11'\n".
     "# if you want to enforce 2.0. The default is to try 2.0 and fall back\n".
     "# to 1.2 if it isn't found.\n".
-    "GTK_CONFIG = sh -c 'pkg-config gtk+-2.0 x11 \$\$0 2>/dev/null || gtk-config \$\$0'\n".
+    "GTK_CONFIG = sh -c 'pkg-config gtk+-3.0 x11 \$\$0 2>/dev/null || pkg-config gtk+-2.0 x11 \$\$0 2>/dev/null || gtk-config \$\$0'\n".
     "\n".
     "-include Makefile.local\n".
     "\n".
@@ -1396,15 +1396,17 @@ if (defined $makefiles{'gtk'}) {
     ".SUFFIXES:\n".
     "\n".
     "\n";
-    print &splitline("all:" . join "", map { " $_" } &progrealnames("X:U:UT"));
+    print &splitline("all:" . join "", map { " $_" }
+                     &progrealnames("X:XT:U:UT"));
     print "\n\n";
-    foreach $p (&prognames("X:U:UT")) {
+    foreach $p (&prognames("X:XT:U:UT")) {
       ($prog, $type) = split ",", $p;
+      ($ldflags = $type) =~ s/T$//;
       $objstr = &objects($p, "X.o", undef, undef);
       print &splitline($prog . ": " . $objstr), "\n";
       $libstr = &objects($p, undef, undef, "-lX");
       print &splitline("\t\$(CC) -o \$@ " .
-                       $objstr . " \$(${type}LDFLAGS) $libstr", 69), "\n\n";
+                       $objstr . " \$(${ldflags}LDFLAGS) $libstr", 69), "\n\n";
     }
     foreach $d (&deps("X.o", undef, $dirpfx, "/", "gtk")) {
       if ($forceobj{$d->{obj_orig}}) {
@@ -1418,7 +1420,7 @@ if (defined $makefiles{'gtk'}) {
     print "\n";
     print &def($makefile_extra{'gtk'}->{'end'});
     print "\nclean:\n".
-    "\trm -f *.o". (join "", map { " $_" } &progrealnames("X:U:UT")) . "\n";
+    "\trm -f *.o". (join "", map { " $_" } &progrealnames("X:XT:U:UT")) . "\n";
     print "\nFORCE:\n";
     select STDOUT; close OUT;
 }
@@ -1529,7 +1531,7 @@ if (defined $makefiles{'am'}) {
     print "endif\n\n";
 
     @noinstcliprogs = ("noinst_PROGRAMS", "=");
-    foreach $p (&prognames("UT")) {
+    foreach $p (&prognames("XT:UT")) {
       ($prog, $type) = split ",", $p;
       push @noinstcliprogs, $prog;
     }
@@ -1561,9 +1563,9 @@ if (defined $makefiles{'am'}) {
     print &splitline(join " ", "noinst_LIBRARIES", "=",
                      sort { $a cmp $b } values %amspeciallibs), "\n\n";
 
-    foreach $p (&prognames("X:U:UT")) {
+    foreach $p (&prognames("X:XT:U:UT")) {
       ($prog, $type) = split ",", $p;
-      print "if HAVE_GTK\n" if $type eq "X";
+      print "if HAVE_GTK\n" if $type eq "X" || $type eq "XT";
       @progsources = ("${prog}_SOURCES", "=");
       %sourcefiles = ();
       @ldadd = ();
@@ -1577,13 +1579,13 @@ if (defined $makefiles{'am'}) {
       }
       push @progsources, sort { $a cmp $b } keys %sourcefiles;
       print &splitline(join " ", @progsources), "\n";
-      if ($type eq "X") {
+      if ($type eq "X" || $type eq "XT") {
         push @ldadd, "\$(GTK_LIBS)";
       }
       if (@ldadd) {
         print &splitline(join " ", "${prog}_LDADD", "=", @ldadd), "\n";
       }
-      print "endif\n" if $type eq "X";
+      print "endif\n" if $type eq "X" || $type eq "XT";
       print "\n";
     }
     print &def($makefile_extra{'am'}->{'end'});
