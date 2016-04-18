@@ -384,7 +384,7 @@ static void ssh2_msg_something_unimplemented(Ssh ssh, struct Packet *pktin);
  *    ensure that the server never has any need to throttle its end
  *    of the connection), so we set this high as well.
  * 
- *  - OUR_V2_WINSIZE is the maximum window size we present on SSH-2
+ *  - OUR_V2_WINSIZE is the default window size we present on SSH-2
  *    channels.
  *
  *  - OUR_V2_BIGWIN is the window size we advertise for the only
@@ -3138,15 +3138,21 @@ static int do_ssh_init(Ssh ssh, unsigned char c)
     /* Anything greater or equal to "1.99" means protocol 2 is supported. */
     s->proto2 = ssh_versioncmp(s->version, "1.99") >= 0;
 
-    if (conf_get_int(ssh->conf, CONF_sshprot) == 0 && !s->proto1) {
-	bombout(("SSH protocol version 1 required by configuration but "
-		 "not provided by server"));
+    if (conf_get_int(ssh->conf, CONF_sshprot) == 0) {
+	if (!s->proto1) {
+	    bombout(("SSH protocol version 1 required by our configuration "
+		     "but not provided by server"));
 	crStop(0);
     }
-    if (conf_get_int(ssh->conf, CONF_sshprot) == 3 && !s->proto2) {
-	bombout(("SSH protocol version 2 required by configuration but "
-		 "not provided by server"));
+    } else if (conf_get_int(ssh->conf, CONF_sshprot) == 3) {
+	if (!s->proto2) {
+	    bombout(("SSH protocol version 2 required by our configuration "
+		     "but server only provides (old, insecure) SSH-1"));
 	crStop(0);
+    }
+    } else {
+	/* No longer support values 1 or 2 for CONF_sshprot */
+	assert(!"Unexpected value for CONF_sshprot");
     }
 
     if (s->proto2 && (conf_get_int(ssh->conf, CONF_sshprot) >= 2 || !s->proto1))
@@ -3708,13 +3714,17 @@ static const char *connect_to_host(Ssh ssh, const char *host, int port,
     }
 
     /*
-     * If the SSH version number's fixed, set it now, and if it's SSH-2,
-     * send the version string too.
+     * The SSH version number is always fixed (since we no longer support
+     * fallback between versions), so set it now, and if it's SSH-2,
+     * send the version string now too.
      */
     sshprot = conf_get_int(ssh->conf, CONF_sshprot);
+    assert(sshprot == 0 || sshprot == 3);
     if (sshprot == 0)
+	/* SSH-1 only */
 	ssh->version = 1;
     if (sshprot == 3 && !ssh->bare_connection) {
+	/* SSH-2 only */
 	ssh->version = 2;
 	ssh_send_verstring(ssh, "SSH-", NULL);
     }
@@ -7299,7 +7309,7 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 	 * Make a note of any other host key formats that are available.
 	 */
 	{
-	    int i, j;
+	    int i, j, nkeys = 0;
 	    char *list = NULL;
 	    for (i = 0; i < lenof(hostkey_algs); i++) {
 		if (hostkey_algs[i].alg == ssh->hostkey)
@@ -7318,13 +7328,15 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 			newlist = dupprintf("%s", hostkey_algs[i].alg->name);
 		    sfree(list);
 		    list = newlist;
+		    nkeys++;
 		}
 	    }
 	    if (list) {
 		logeventf(ssh,
 			  "Server also has %s host key%s, but we "
 			  "don't know %s", list,
-			  j > 1 ? "s" : "", j > 1 ? "any of them" : "it");
+			  nkeys > 1 ? "s" : "",
+			  nkeys > 1 ? "any of them" : "it");
 		sfree(list);
 	    }
 	}

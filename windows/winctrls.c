@@ -269,10 +269,9 @@ void radioline(struct ctlpos *cp, char *text, int id, int nacross, ...)
     nbuttons = 0;
     while (1) {
 	char *btext = va_arg(ap, char *);
-	int bid;
 	if (!btext)
 	    break;
-	bid = va_arg(ap, int);
+	(void) va_arg(ap, int); /* id */
 	nbuttons++;
     }
     va_end(ap);
@@ -301,10 +300,9 @@ void bareradioline(struct ctlpos *cp, int nacross, ...)
     nbuttons = 0;
     while (1) {
 	char *btext = va_arg(ap, char *);
-	int bid;
 	if (!btext)
 	    break;
-	bid = va_arg(ap, int);
+	(void) va_arg(ap, int); /* id */
     }
     va_end(ap);
     buttons = snewn(nbuttons, struct radio);
@@ -332,10 +330,9 @@ void radiobig(struct ctlpos *cp, char *text, int id, ...)
     nbuttons = 0;
     while (1) {
 	char *btext = va_arg(ap, char *);
-	int bid;
 	if (!btext)
 	    break;
-	bid = va_arg(ap, int);
+	(void) va_arg(ap, int); /* id */
     }
     va_end(ap);
     buttons = snewn(nbuttons, struct radio);
@@ -1166,54 +1163,27 @@ void progressbar(struct ctlpos *cp, int id)
  */
 static char *shortcut_escape(const char *text, char shortcut)
 {
-	int text_len;
     char *ret;
     char const *p;
     char *q;
-    char *r, lastchar = '\0';
-    int search;
 
     if (!text)
 	return NULL;		       /* sfree won't choke on this */
 
-	text_len = strlen(text);
-	ret = snewn(text_len > 4 ? 2*text_len+1 : text_len + 5, char);   /* size potentially doubles! */
+    ret = snewn(2*strlen(text)+1, char);   /* size potentially doubles! */
     shortcut = tolower((unsigned char)shortcut);
 
     p = text;
-    search = 1;
-    while (*p) {
-	 r = CharNext (p);
-	 if (r - p > 1) {
-	      search = 0;
-	      break;
-	 }
-	 p = r;
-    }
-    p = text;
     q = ret;
     while (*p) {
-	if (search && shortcut != NO_SHORTCUT &&
+	if (shortcut != NO_SHORTCUT &&
 	    tolower((unsigned char)*p) == shortcut) {
 	    *q++ = '&';
 	    shortcut = NO_SHORTCUT;    /* stop it happening twice */
 	} else if (*p == '&') {
 	    *q++ = '&';
 	}
-	lastchar = *p;
-	r = CharNext (p);
-	while (p != r)
 	     *q++ = *p++;
-    }
-    if (shortcut != NO_SHORTCUT) { /* Japanese style shortcut */
-	 if (lastchar == ':')
-	      q--;
-	 *q++ = '(';
-	 *q++ = '&';
-	 *q++ = toupper(shortcut);
-	 *q++ = ')';
-	 if (lastchar == ':')
-	      *q++ = lastchar;
     }
     *q = '\0';
     return ret;

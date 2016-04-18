@@ -67,7 +67,7 @@ void force_normal(HWND hwnd)
     recurse = 0;
 }
 
-static int CALLBACK LogProc(HWND hwnd, UINT msg,
+static INT_PTR CALLBACK LogProc(HWND hwnd, UINT msg,
 			    WPARAM wParam, LPARAM lParam)
 {
     int i;
@@ -163,7 +163,7 @@ static int CALLBACK LogProc(HWND hwnd, UINT msg,
     return 0;
 }
 
-static int CALLBACK LicenceProc(HWND hwnd, UINT msg,
+static INT_PTR CALLBACK LicenceProc(HWND hwnd, UINT msg,
 				WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
@@ -191,7 +191,7 @@ static int CALLBACK LicenceProc(HWND hwnd, UINT msg,
     return 0;
 }
 
-static int CALLBACK AboutProc(HWND hwnd, UINT msg,
+static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
 			      WPARAM wParam, LPARAM lParam)
 {
     char *str;
@@ -295,7 +295,7 @@ static void SaneEndDialog(HWND hwnd, int ret)
 /*
  * Null dialog procedure.
  */
-static int CALLBACK NullDlgProc(HWND hwnd, UINT msg,
+static INT_PTR CALLBACK NullDlgProc(HWND hwnd, UINT msg,
 				WPARAM wParam, LPARAM lParam)
 {
     return 0;
@@ -380,7 +380,7 @@ static void create_controls(HWND hwnd, char *path)
  * (Being a dialog procedure, in general it returns 0 if the default
  * dialog processing should be performed, and 1 if it should not.)
  */
-static int CALLBACK GenericMainDlgProc(HWND hwnd, UINT msg,
+static INT_PTR CALLBACK GenericMainDlgProc(HWND hwnd, UINT msg,
 				       WPARAM wParam, LPARAM lParam)
 {
     HWND hw, treeview;
@@ -734,7 +734,7 @@ int do_reconfig(HWND hwnd, int protcfginfo)
     dlg_auto_set_fixed_pitch_flag(&dp);
     dp.shortcuts['g'] = TRUE;	       /* the treeview: `Cate&gory' */
 
-    ret = SaneDialogBox(hinst, MAKEINTRESOURCE(IDD_MAINBOX), hwnd,
+    ret = SaneDialogBox(hinst, MAKEINTRESOURCE(IDD_MAINBOX), NULL,
 		  GenericMainDlgProc);
 
     ctrl_free_box(ctrlbox);

@@ -63,7 +63,7 @@ typedef struct terminal_tag Terminal;
 
 #define DATTR_STARTRUN      0x80000000UL   /* start of redraw run */
 
-#define TDATTR_MASK         0xF0000000ULL
+#define TDATTR_MASK         0xF0000000UL
 #define TATTR_MASK (TDATTR_MASK)
 #define DATTR_MASK (TDATTR_MASK)
 
@@ -77,7 +77,7 @@ typedef struct terminal_tag Terminal;
 					  wrapped to next line, so last
 					  single-width cell is empty */
 
-#define ATTR_INVALID 0x03FFFFUL
+#define ATTR_INVALID 0x03FFFFU
 
 /* Like Linux use the F000 page for direct to font. */
 #define CSET_OEMCP   0x0000F000UL      /* OEM Codepage DTF */
@@ -820,7 +820,20 @@ void cleanup_exit(int);
     X(INT, NONE, change_username) /* allow username switching in SSH-2 */ \
     X(INT, INT, ssh_cipherlist) \
     X(FILENAME, NONE, keyfile) \
-    X(INT, NONE, sshprot) /* use v1 or v2 when both available */ \
+    /* \
+     * Which SSH protocol to use. \
+     * For historical reasons, the current legal values for CONF_sshprot \
+     * are: \
+     *  0 = SSH-1 only \
+     *  3 = SSH-2 only \
+     * We used to also support \
+     *  1 = SSH-1 with fallback to SSH-2 \
+     *  2 = SSH-2 with fallback to SSH-1 \
+     * and we continue to use 0/3 in storage formats rather than the more \
+     * obvious 1/2 to avoid surprises if someone saves a session and later \
+     * downgrades PuTTY. So it's easier to use these numbers internally too. \
+     */ \
+    X(INT, NONE, sshprot) \
     X(INT, NONE, ssh2_des_cbc) /* "des-cbc" unrecommended SSH-2 cipher */ \
     X(INT, NONE, ssh_no_userauth) /* bypass "ssh-userauth" (SSH-2 only) */ \
     X(INT, NONE, ssh_show_banner) /* show USERAUTH_BANNERs (SSH-2 only) */ \
@@ -1051,7 +1064,7 @@ void cleanup_exit(int);
 enum config_primary_key { CONFIG_OPTIONS(CONF_ENUM_DEF) N_CONFIG_OPTIONS };
 #undef CONF_ENUM_DEF
 
-#define NCFGCOLOURS 24 /* number of colours in CONF_colours above */
+#define NCFGCOLOURS 22 /* number of colours in CONF_colours above */
 
 /* Functions handling configuration structures. */
 Conf *conf_new(void);		       /* create an empty configuration */
@@ -1305,7 +1318,7 @@ void ser_setup_config_box(struct controlbox *b, int midsession,
 /*
  * Exports from version.c.
  */
-extern char ver[];
+extern const char ver[];
 
 /*
  * Exports from unicode.c.
@@ -1611,6 +1624,7 @@ unsigned long schedule_timer(int ticks, timer_fn_t fn, void *ctx);
 void expire_timer_context(void *ctx);
 int run_timers(unsigned long now, unsigned long *next);
 void timer_change_notify(unsigned long next);
+unsigned long timing_last_clock(void);
 
 /*
  * Exports from callback.c.

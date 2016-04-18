@@ -94,11 +94,7 @@ struct gui_data {
     GtkIMContext *imc;
 #endif
     unifont *fonts[4];                 /* normal, bold, wide, widebold */
-#if GTK_CHECK_VERSION(2,0,0)
-    const char *geometry;
-#else
     int xpos, ypos, gotpos, gravity;
-#endif
     GdkCursor *rawcursor, *textcursor, *blankcursor, *waitcursor, *currcursor;
     GdkColor cols[NALLCOLOURS];
 #if !GTK_CHECK_VERSION(3,0,0)
@@ -341,6 +337,8 @@ void move_window(void *frontend, int x, int y)
      * though.
      */
 #if GTK_CHECK_VERSION(2,0,0)
+    /* in case we reset this at startup due to a geometry string */
+    gtk_window_set_gravity(GTK_WINDOW(inst->window), GDK_GRAVITY_NORTH_EAST);
     gtk_window_move(GTK_WINDOW(inst->window), x, y);
 #else
     gdk_window_move(gtk_widget_get_window(inst->window), x, y);
@@ -2014,6 +2012,12 @@ void set_raw_mouse_mode(void *frontend, int activate)
     update_mouseptr(inst);
 }
 
+#if GTK_CHECK_VERSION(2,0,0)
+static void compute_whole_window_size(struct gui_data *inst,
+                                      int wchars, int hchars,
+                                      int *wpix, int *hpix);
+#endif
+
 void request_resize(void *frontend, int w, int h)
 {
     struct gui_data *inst = (struct gui_data *)frontend;
@@ -2095,14 +2099,9 @@ void request_resize(void *frontend, int w, int h)
 
 #else /* GTK_CHECK_VERSION(3,0,0) */
 
-    /*
-     * In GTK3, we can do this by using gtk_window_resize_to_geometry,
-     * which uses the fact that we've already set up the main window's
-     * WM hints to reflect the terminal drawing area's resize
-     * increment (i.e. character cell) and the fixed amount of stuff
-     * round the edges.
-     */
-    gtk_window_resize_to_geometry(GTK_WINDOW(inst->window), w, h);
+    int wp, hp;
+    compute_whole_window_size(inst, w, h, &wp, &hp);
+    gtk_window_resize(GTK_WINDOW(inst->window), wp, hp);
 
 #endif
 
@@ -2833,7 +2832,9 @@ void set_sbar(void *frontend, int total, int start, int page)
     gtk_adjustment_set_step_increment(inst->sbar_adjust, 1);
     gtk_adjustment_set_page_increment(inst->sbar_adjust, page/2);
     inst->ignore_sbar = TRUE;
+#if !GTK_CHECK_VERSION(3,18,0)
     gtk_adjustment_changed(inst->sbar_adjust);
+#endif
     inst->ignore_sbar = FALSE;
 }
 
@@ -3606,29 +3607,37 @@ char *setup_fonts_ucs(struct gui_data *inst)
     return NULL;
 }
 
-void set_geom_hints(struct gui_data *inst)
+#if GTK_CHECK_VERSION(3,0,0)
+struct find_app_menu_bar_ctx {
+    GtkWidget *area, *menubar;
+};
+static void find_app_menu_bar(GtkWidget *widget, gpointer data)
 {
-    GdkGeometry geom;
-    gint flags;
+    struct find_app_menu_bar_ctx *ctx = (struct find_app_menu_bar_ctx *)data;
+    if (widget != ctx->area && GTK_IS_MENU_BAR(widget))
+        ctx->menubar = widget;
+}
+#endif
 
+static void compute_geom_hints(struct gui_data *inst, GdkGeometry *geom)
+{
     /*
      * Unused fields in geom.
      */
-    geom.max_width = geom.max_height = -1;
-    geom.min_aspect = geom.max_aspect = 0;
+    geom->max_width = geom->max_height = -1;
+    geom->min_aspect = geom->max_aspect = 0;
 
     /*
      * Set up the geometry fields we care about, with reference to
-     * just the drawing area. We'll correct for the scrollbar in a
+     * just the drawing area. We'll correct for other widgets in a
      * moment.
      */
-    flags = GDK_HINT_MIN_SIZE | GDK_HINT_BASE_SIZE | GDK_HINT_RESIZE_INC;
-    geom.min_width = inst->font_width + 2*inst->window_border;
-    geom.min_height = inst->font_height + 2*inst->window_border;
-    geom.base_width = 2*inst->window_border;
-    geom.base_height = 2*inst->window_border;
-    geom.width_inc = inst->font_width;
-    geom.height_inc = inst->font_height;
+    geom->min_width = inst->font_width + 2*inst->window_border;
+    geom->min_height = inst->font_height + 2*inst->window_border;
+    geom->base_width = 2*inst->window_border;
+    geom->base_height = 2*inst->window_border;
+    geom->width_inc = inst->font_width;
+    geom->height_inc = inst->font_height;
 
     /*
      * If we've got a scrollbar visible, then we must include its
@@ -3637,8 +3646,8 @@ void set_geom_hints(struct gui_data *inst)
      * the scrollbar.
      *
      * In the latter case, we must also take care to arrange that
-     * (geom.min_height - geom.base_height) is an integer multiple of
-     * geom.height_inc, because if it's not, then some window managers
+     * (geom->min_height - geom->base_height) is an integer multiple of
+     * geom->height_inc, because if it's not, then some window managers
      * (we know of xfwm4) get confused, with the effect that they
      * resize our window to a height based on min_height instead of
      * base_height, which we then round down and the window ends up
@@ -3656,19 +3665,85 @@ void set_geom_hints(struct gui_data *inst)
 
         /* Compute rounded-up scrollbar height. */
         min_sb_height = req.height;
-        min_sb_height += geom.height_inc - 1;
-        min_sb_height -= ((min_sb_height - geom.base_height % geom.height_inc)
-                          % geom.height_inc);
+        min_sb_height += geom->height_inc - 1;
+        min_sb_height -= ((min_sb_height - geom->base_height%geom->height_inc)
+                          % geom->height_inc);
 
-        geom.min_width += req.width;
-        geom.base_width += req.width;
-        if (geom.min_height < min_sb_height)
-            geom.min_height = min_sb_height;
+        geom->min_width += req.width;
+        geom->base_width += req.width;
+        if (geom->min_height < min_sb_height)
+            geom->min_height = min_sb_height;
     }
 
+#if GTK_CHECK_VERSION(3,0,0)
+    /*
+     * And if we're running a gtkapp.c based program and
+     * GtkApplicationWindow has given us a menu bar inside the window,
+     * then we must take that into account as well.
+     *
+     * In its unbounded wisdom, GtkApplicationWindow doesn't actually
+     * give us a direct function call to _find_ the menu bar widget.
+     * Fortunately, we can find it by enumerating the children of the
+     * top-level window and looking for one we didn't put there
+     * ourselves.
+     */
+    {
+        struct find_app_menu_bar_ctx actx, *ctx = &actx;
+        ctx->area = inst->area;
+        ctx->menubar = NULL;
+        gtk_container_foreach(GTK_CONTAINER(inst->window),
+                              find_app_menu_bar, ctx);
+
+        if (ctx->menubar) {
+            GtkRequisition req;
+            int min_menu_width;
+            gtk_widget_get_preferred_size(ctx->menubar, NULL, &req);
+
+            /*
+             * This time, the height adjustment is easy (the menu bar
+             * sits above everything), but we have to take care with
+             * the _width_ to ensure we keep min_width and base_width
+             * congruent modulo width_inc.
+             */
+            geom->min_height += req.height;
+            geom->base_height += req.height;
+
+            min_menu_width = req.width;
+            min_menu_width += geom->width_inc - 1;
+            min_menu_width -=
+                ((min_menu_width - geom->base_width%geom->width_inc)
+                 % geom->width_inc);
+            if (geom->min_width < min_menu_width)
+                geom->min_width = min_menu_width;
+        }
+    }
+#endif
+}
+
+void set_geom_hints(struct gui_data *inst)
+{
+    GdkGeometry geom;
+    gint flags = GDK_HINT_MIN_SIZE | GDK_HINT_BASE_SIZE | GDK_HINT_RESIZE_INC;
+    compute_geom_hints(inst, &geom);
+#if GTK_CHECK_VERSION(2,0,0)
+    if (inst->gotpos)
+        flags |= GDK_HINT_USER_POS;
+#endif
     gtk_window_set_geometry_hints(GTK_WINDOW(inst->window),
                                   NULL, &geom, flags);
 }
+
+#if GTK_CHECK_VERSION(2,0,0)
+static void compute_whole_window_size(struct gui_data *inst,
+                                      int wchars, int hchars,
+                                      int *wpix, int *hpix)
+{
+    GdkGeometry geom;
+    compute_geom_hints(inst, &geom);
+    if (wpix) *wpix = geom.base_width + wchars * geom.width_inc;
+    if (hpix) *hpix = geom.base_height + hchars * geom.height_inc;
+}
+#endif
 
 void clear_scrollback_menuitem(GtkMenuItem *item, gpointer data)
 {
@@ -4136,11 +4211,8 @@ struct gui_data *new_session_window(Conf *conf, const char *geometry_string)
     inst->cumulative_scroll = 0.0;
 #endif
 
+#ifndef NOT_X_WINDOWS
     if (geometry_string) {
-#if GTK_CHECK_VERSION(2,0,0)
-        inst->geometry = geometry_string;
-#else
-        /* On GTK 1, we have to do this using raw Xlib */
         int flags, x, y;
         unsigned int w, h;
         flags = XParseGeometry(geometry_string, &x, &y, &w, &h);
@@ -4156,8 +4228,8 @@ struct gui_data *new_session_window(Conf *conf, const char *geometry_string)
             inst->gravity = ((flags & XNegative ? 1 : 0) |
                              (flags & YNegative ? 2 : 0));
         }
-#endif
     }
+#endif
 
     if (!compound_text_atom)
         compound_text_atom = gdk_atom_intern("COMPOUND_TEXT", FALSE);
@@ -4216,11 +4288,21 @@ struct gui_data *new_session_window(Conf *conf, const char *geometry_string)
     show_scrollbar(inst, conf_get_int(inst->conf, CONF_scrollbar));
     gtk_widget_show(GTK_WIDGET(inst->hbox));
 
+    /*
+     * We must call gtk_widget_realize before setting up the geometry
+     * hints, so that GtkApplicationWindow will have actually created
+     * its menu bar (if it's going to) and hence compute_geom_hints
+     * can find it to take its size into account.
+     */
+    gtk_widget_realize(inst->window);
     set_geom_hints(inst);
 
 #if GTK_CHECK_VERSION(3,0,0)
-    gtk_window_set_default_geometry(GTK_WINDOW(inst->window),
-                                    inst->width, inst->height);
+    {
+        int wp, hp;
+        compute_whole_window_size(inst, inst->width, inst->height, &wp, &hp);
+        gtk_window_set_default_size(GTK_WINDOW(inst->window), wp, hp);
+    }
 #else
     {
         int w = inst->font_width * inst->width + 2*inst->window_border;
@@ -4234,8 +4316,21 @@ struct gui_data *new_session_window(Conf *conf, const char *geometry_string)
 #endif
 
 #if GTK_CHECK_VERSION(2,0,0)
-    if (inst->geometry) {
-        gtk_window_parse_geometry(GTK_WINDOW(inst->window), inst->geometry);
+    if (inst->gotpos) {
+        static const GdkGravity gravities[] = {
+            GDK_GRAVITY_NORTH_WEST,
+            GDK_GRAVITY_NORTH_EAST,
+            GDK_GRAVITY_SOUTH_WEST,
+            GDK_GRAVITY_SOUTH_EAST,
+        };
+        int x = inst->xpos, y = inst->ypos;
+        int wp, hp;
+        compute_whole_window_size(inst, inst->width, inst->height, &wp, &hp);
+        if (inst->gravity & 1) x += (gdk_screen_width() - wp);
+        if (inst->gravity & 2) y += (gdk_screen_height() - hp);
+        gtk_window_set_gravity(GTK_WINDOW(inst->window),
+                               gravities[inst->gravity & 3]);
+	gtk_window_move(GTK_WINDOW(inst->window), x, y);
     }
 #else
     if (inst->gotpos) {

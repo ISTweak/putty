@@ -335,9 +335,6 @@ static void start_backend(void)
 		       conf_get_int(conf, CONF_tcp_nodelay),
 		       conf_get_int(conf, CONF_tcp_keepalives));
     back->provide_logctx(backhandle, logctx);
-
-    /* Reconnect */
-    /*
     if (error) {
 	char *str = dupprintf("%s Error", appname);
 	sprintf(msg, "Unable to open connection to\n"
@@ -346,7 +343,6 @@ static void start_backend(void)
 	sfree(str);
 	exit(0);
     }
-    */
     window_name = icon_name = NULL;
     title = conf_get_str(conf, CONF_wintitle);
     if (!*title) {
@@ -482,7 +478,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
      * Protect our process
      */
     {
-#ifndef UNPROTECT
+#if !defined UNPROTECT && !defined NO_SECURITY
         char *error = NULL;
         if (! setprocessacl(error)) {
             char *message = dupprintf("Could not restrict process ACL: %s",
@@ -595,7 +591,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	     * Otherwise, break up the command line and deal with
 	     * it sensibly.
 	     */
-	    int i;
+	    int argc, i;
+	    char **argv;
+	    
+	    split_into_argv(cmdline, &argc, &argv, NULL);
+
 	    for (i = 0; i < argc; i++) {
 		char *p = argv[i];
 		int ret;
@@ -1209,13 +1209,14 @@ void update_specials_menu(void *frontend)
     for (j = 0; j < lenof(popup_menus); j++) {
 	if (specials_menu) {
 	    /* XXX does this free up all submenus? */
-	    DeleteMenu(popup_menus[j].menu, (UINT)specials_menu, MF_BYCOMMAND);
+	    DeleteMenu(popup_menus[j].menu, (UINT_PTR)specials_menu,
+                       MF_BYCOMMAND);
 	    DeleteMenu(popup_menus[j].menu, IDM_SPECIALSEP, MF_BYCOMMAND);
 	}
 	if (new_menu) {
 	    InsertMenu(popup_menus[j].menu, IDM_SHOWLOG,
 		       MF_BYCOMMAND | MF_POPUP | MF_ENABLED,
-		       (UINT) new_menu, "S&pecial Command");
+		       (UINT_PTR) new_menu, "S&pecial Command");
 	    InsertMenu(popup_menus[j].menu, IDM_SHOWLOG,
 		       MF_BYCOMMAND | MF_SEPARATOR, IDM_SPECIALSEP, 0);
 	}
@@ -1525,10 +1526,7 @@ static void exact_textout(HDC hdc, int x, int y, CONST RECT *lprc,
  */
 static void general_textout(HDC hdc, int x, int y, CONST RECT *lprc,
 			    unsigned short *lpString, UINT cbCount,
-			    CONST INT *lpDx, int opaque,
-			    void (*ExtTextOutW) (HDC, int, int, UINT,
-						 const RECT *, WCHAR *, UINT,
-						 const int *))
+			    CONST INT *lpDx, int opaque)
 {
     int i, j, xp, xn;
     int bkmode = 0, got_bkmode = FALSE;
@@ -3456,10 +3454,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
 
 	    if (wParam == VK_PROCESSKEY || /* IME PROCESS key */
                 wParam == VK_PACKET) {     /* 'this key is a Unicode char' */
-		if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
+		if (message == WM_KEYDOWN) {
 		    MSG m;
 		    m.hwnd = hwnd;
-		    m.message = message;
+		    m.message = WM_KEYDOWN;
 		    m.wParam = wParam;
 		    m.lParam = lParam & 0xdfff;
 		    TranslateMessage(&m);
@@ -3817,7 +3815,7 @@ static void sys_cursor_update(void)
  * We are allowed to fiddle with the contents of `text'.
  */
 void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
-		      unsigned long long attr, int lattr)
+		      unsigned long attr, int lattr)
 {
     COLORREF fg, bg, t;
     int nfg, nbg, nfont;
@@ -4176,9 +4174,7 @@ void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
             general_textout(hdc, x + xoffset,
                             y - font_height * (lattr==LATTR_BOT) + text_adjust,
                             &line_box, wbuf, len, lpDx,
-                            opaque && !(attr & TATTR_COMBINING),
-                            (attr & ATTR_WIDE) ? ExtTextOutW2wide
-                            : ExtTextOutW2narrow);
+                            opaque && !(attr & TATTR_COMBINING));
 
             /* And the shadow bold hack. */
             if (bold_font_mode == BOLD_SHADOW && (attr & ATTR_BOLD)) {
@@ -4217,7 +4213,7 @@ void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
  * Wrapper that handles combining characters.
  */
 void do_text(Context ctx, int x, int y, wchar_t *text, int len,
-	     unsigned long long attr, int lattr)
+	     unsigned long attr, int lattr)
 {
     if (attr & TATTR_COMBINING) {
 	unsigned long a = 0;
@@ -4258,7 +4254,7 @@ void do_text(Context ctx, int x, int y, wchar_t *text, int len,
 }
 
 void do_cursor(Context ctx, int x, int y, wchar_t *text, int len,
-	       unsigned long long attr, int lattr)
+	       unsigned long attr, int lattr)
 {
 
     int fnt_width;

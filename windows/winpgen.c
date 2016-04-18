@@ -12,6 +12,7 @@
 #include "putty.h"
 #include "ssh.h"
 #include "licence.h"
+#include "winsecur.h"
 
 #include <commctrl.h>
 
@@ -139,7 +140,7 @@ static void progress_update(void *param, int action, int phase, int iprogress)
     }
 }
 
-extern char ver[];
+extern const char ver[];
 
 struct PassphraseProcStruct {
     char **passphrase;
@@ -303,7 +304,7 @@ static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
 
         {
             char *text = dupprintf
-                ("Pageant\r\n\r\n%s\r\n\r\n%s",
+                ("PuTTYgen\r\n\r\n%s\r\n\r\n%s",
                  ver,
                  "\251 " SHORT_COPYRIGHT_DETAILS ". All rights reserved.");
             SetDlgItemText(hwnd, 1000, text);
@@ -1139,6 +1140,16 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 			break;
 		    state->key_bits = DEFAULT_KEY_BITS;
 		    SetDlgItemInt(hwnd, IDC_BITS, DEFAULT_KEY_BITS, FALSE);
+		} else if ((state->keytype == RSA || state->keytype == DSA) &&
+                           state->key_bits < DEFAULT_KEY_BITS) {
+                    char *message = dupprintf
+                        ("Keys shorter than %d bits are not recommended. "
+                         "Really generate this key?", DEFAULT_KEY_BITS);
+		    int ret = MessageBox(hwnd, message, "PuTTYgen Warning",
+					 MB_ICONWARNING | MB_OKCANCEL);
+                    sfree(message);
+		    if (ret != IDOK)
+			break;
                 }
 		ui_set_state(hwnd, state, 1);
 		l10nSetDlgItemText(hwnd, IDC_GENERATING, entropy_msg);
@@ -1541,6 +1552,23 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	    cmdline_keyfile = argv[0];
 	}
     }
+
+#if !defined UNPROTECT && !defined NO_SECURITY
+    /*
+     * Protect our process.
+     */
+    {
+        char *error = NULL;
+        if (!setprocessacl(error)) {
+            char *message = dupprintf("Could not restrict process ACL: %s",
+                                      error);
+            MessageBox(NULL, message, "PuTTYgen Warning",
+                       MB_ICONWARNING | MB_OK);
+            sfree(message);
+            sfree(error);
+        }
+    }
+#endif
 
     random_ref();
     ret = DialogBox(hinst, MAKEINTRESOURCE(201), NULL, MainDlgProc) != IDOK;
