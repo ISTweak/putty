@@ -308,7 +308,7 @@ puttygen : [G] winpgen sshrsag sshdssg sshprime sshdes sshbn sshmd5 version
          + sshrand winnoise sshsha winstore misc winctrls sshrsa sshdss winmisc
          + sshpubk sshaes sshsh256 sshsh512 IMPORT winutils puttygen.res
          + tree234 notiming winhelp winnojmp conf LIBS wintime sshecc
-         + sshecdsag
+         + sshecdsag winsecur
          + winl10n iso2022 wcwidth
 
 pfwd     : [G] pfwd wincons2 NONSSH WINSSH W_BE_ALL logging WINMISC
@@ -336,8 +336,9 @@ PUTTYGEN_UNIX = sshrsag sshdssg sshprime sshdes sshbn sshmd5 version
          + sshrand uxnoise sshsha misc sshrsa sshdss uxcons uxstore uxmisc
          + sshpubk sshaes sshsh256 sshsh512 IMPORT puttygen.res time tree234
          + uxgen notiming conf sshecc sshecdsag
-         + uxl10n
 puttygen : [U] cmdgen PUTTYGEN_UNIX
+         + uxl10n
+
 cgtest   : [UT] cgtest PUTTYGEN_UNIX
 
 pscp     : [U] pscp uxsftp uxcons UXSSH BE_SSH SFTP wildcard UXMISC
@@ -354,11 +355,9 @@ pageant  : [X] uxpgnt uxagentc pageant sshrsa sshpubk sshdes sshbn sshmd5
 ptermapp : [XT] GTKTERM uxmisc misc ldisc settings uxpty uxsel BE_NONE uxstore
          + uxsignal CHARSET cmdline uxpterm version time xpmpterm xpmptcfg
          + nogss gtkapp
-         + uxl10n
 puttyapp : [XT] GTKTERM uxmisc misc ldisc settings uxsel U_BE_ALL uxstore
          + uxsignal CHARSET uxputty NONSSH UXSSH UXMISC ux_x11 xpmputty
          + xpmpucfg gtkapp
-         + uxl10n
 osxlaunch : [UT] osxlaunch
 
 fuzzterm : [UT] UXTERM CHARSET misc uxmisc uxucs fuzzterm time settings

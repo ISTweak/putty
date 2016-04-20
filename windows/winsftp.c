@@ -747,9 +747,6 @@ char *ssh_sftp_get_cmdline(const char *prompt, int no_fds_ok)
     return ctx->line;
 }
 
-extern int use_inifile;
-extern char inifile[2 * MAX_PATH + 10];
-
 void platform_psftp_post_option_setup(void)
 {
 #if !defined UNPROTECT && !defined NO_SECURITY
@@ -768,6 +765,9 @@ void platform_psftp_post_option_setup(void)
     }
 #endif
 }
+
+extern int use_inifile;
+extern char inifile[2 * MAX_PATH + 10];
 
 /* ----------------------------------------------------------------------
  * Main program. Parse arguments etc.

@@ -335,6 +335,9 @@ static void start_backend(void)
 		       conf_get_int(conf, CONF_tcp_nodelay),
 		       conf_get_int(conf, CONF_tcp_keepalives));
     back->provide_logctx(backhandle, logctx);
+
+    /* Reconnect */
+    /*
     if (error) {
 	char *str = dupprintf("%s Error", appname);
 	sprintf(msg, "Unable to open connection to\n"
@@ -343,6 +346,7 @@ static void start_backend(void)
 	sfree(str);
 	exit(0);
     }
+    */
     window_name = icon_name = NULL;
     title = conf_get_str(conf, CONF_wintitle);
     if (!*title) {
@@ -591,11 +595,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	     * Otherwise, break up the command line and deal with
 	     * it sensibly.
 	     */
-	    int argc, i;
-	    char **argv;
-	    
-	    split_into_argv(cmdline, &argc, &argv, NULL);
-
+	    int i;
 	    for (i = 0; i < argc; i++) {
 		char *p = argv[i];
 		int ret;
@@ -939,7 +939,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
 	popup_menus[SYSMENU].menu = GetSystemMenu(hwnd, FALSE);
 	popup_menus[CTXMENU].menu = CreatePopupMenu();
-	AppendMenu(popup_menus[CTXMENU].menu, MF_ENABLED, IDM_PASTE, "&Paste");
+	l10nAppendMenu(popup_menus[CTXMENU].menu, MF_ENABLED, IDM_PASTE, "&Paste");
 
 	savedsess_menu = CreateMenu();
 	get_sesslist(&sesslist, TRUE);
@@ -949,26 +949,26 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	    m = popup_menus[j].menu;
 
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
-	    AppendMenu(m, MF_ENABLED, IDM_SHOWLOG, l10n_dupstr("&Event Log"));
+	    l10nAppendMenu(m, MF_ENABLED, IDM_SHOWLOG, "&Event Log");
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
-	    AppendMenu(m, MF_ENABLED, IDM_NEWSESS, l10n_dupstr("Ne&w Session..."));
-	    AppendMenu(m, MF_ENABLED, IDM_DUPSESS, l10n_dupstr("&Duplicate Session"));
-	    AppendMenu(m, MF_POPUP | MF_ENABLED, (UINT) savedsess_menu,
-		       l10n_dupstr("Sa&ved Sessions"));
-	    AppendMenu(m, MF_ENABLED, IDM_RECONF, l10n_dupstr("Chan&ge Settings..."));
+	    l10nAppendMenu(m, MF_ENABLED, IDM_NEWSESS, "Ne&w Session...");
+	    l10nAppendMenu(m, MF_ENABLED, IDM_DUPSESS, "&Duplicate Session");
+	    l10nAppendMenu(m, MF_POPUP | MF_ENABLED, (UINT_PTR) savedsess_menu,
+		       "Sa&ved Sessions");
+	    l10nAppendMenu(m, MF_ENABLED, IDM_RECONF, "Chan&ge Settings...");
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
-	    AppendMenu(m, MF_ENABLED, IDM_COPYALL, l10n_dupstr("C&opy All to Clipboard"));
-	    AppendMenu(m, MF_ENABLED, IDM_CLRSB, l10n_dupstr("C&lear Scrollback"));
-	    AppendMenu(m, MF_ENABLED, IDM_RESET, l10n_dupstr("Rese&t Terminal"));
+	    l10nAppendMenu(m, MF_ENABLED, IDM_COPYALL, "C&opy All to Clipboard");
+	    l10nAppendMenu(m, MF_ENABLED, IDM_CLRSB, "C&lear Scrollback");
+	    l10nAppendMenu(m, MF_ENABLED, IDM_RESET, "Rese&t Terminal");
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
-	    AppendMenu(m, (conf_get_int(conf, CONF_resize_action)
+	    l10nAppendMenu(m, (conf_get_int(conf, CONF_resize_action)
 			   == RESIZE_DISABLED) ? MF_GRAYED : MF_ENABLED,
-		       IDM_FULLSCREEN, l10n_dupstr("&Full Screen"));
+		       IDM_FULLSCREEN, "&Full Screen");
 	    AppendMenu(m, MF_SEPARATOR, 0, 0);
 	    if (has_help())
-		AppendMenu(m, MF_ENABLED, IDM_HELP, l10n_dupstr("&Help"));
+		l10nAppendMenu(m, MF_ENABLED, IDM_HELP, "&Help");
 	    str = dupprintf("&About %s", appname);
-	    AppendMenu(m, MF_ENABLED, IDM_ABOUT, l10n_dupstr(str));
+	    l10nAppendMenu(m, MF_ENABLED, IDM_ABOUT, str);
 	    sfree(str);
 	}
     }
@@ -1184,7 +1184,7 @@ void update_specials_menu(void *frontend)
 		saved_menu = new_menu; /* XXX lame stacking */
 		new_menu = CreatePopupMenu();
 		AppendMenu(saved_menu, MF_POPUP | MF_ENABLED,
-			   (UINT) new_menu, specials[i].name);
+			   (UINT_PTR) new_menu, specials[i].name);
 		break;
 	      case TS_EXITMENU:
 		nesting--;
@@ -1526,7 +1526,10 @@ static void exact_textout(HDC hdc, int x, int y, CONST RECT *lprc,
  */
 static void general_textout(HDC hdc, int x, int y, CONST RECT *lprc,
 			    unsigned short *lpString, UINT cbCount,
-			    CONST INT *lpDx, int opaque)
+			    CONST INT *lpDx, int opaque,
+			    void (*ExtTextOutW) (HDC, int, int, UINT,
+						 const RECT *, WCHAR *, UINT,
+						 const int *))
 {
     int i, j, xp, xn;
     int bkmode = 0, got_bkmode = FALSE;
@@ -3454,10 +3457,10 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
 
 	    if (wParam == VK_PROCESSKEY || /* IME PROCESS key */
                 wParam == VK_PACKET) {     /* 'this key is a Unicode char' */
-		if (message == WM_KEYDOWN) {
+		if (message == WM_KEYDOWN || message == WM_SYSKEYDOWN) {
 		    MSG m;
 		    m.hwnd = hwnd;
-		    m.message = WM_KEYDOWN;
+		    m.message = message;
 		    m.wParam = wParam;
 		    m.lParam = lParam & 0xdfff;
 		    TranslateMessage(&m);
@@ -3815,7 +3818,7 @@ static void sys_cursor_update(void)
  * We are allowed to fiddle with the contents of `text'.
  */
 void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
-		      unsigned long attr, int lattr)
+		      unsigned long long attr, int lattr)
 {
     COLORREF fg, bg, t;
     int nfg, nbg, nfont;
@@ -4174,7 +4177,9 @@ void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
             general_textout(hdc, x + xoffset,
                             y - font_height * (lattr==LATTR_BOT) + text_adjust,
                             &line_box, wbuf, len, lpDx,
-                            opaque && !(attr & TATTR_COMBINING));
+                            opaque && !(attr & TATTR_COMBINING),
+                            (attr & ATTR_WIDE) ? ExtTextOutW2wide
+                            : ExtTextOutW2narrow);
 
             /* And the shadow bold hack. */
             if (bold_font_mode == BOLD_SHADOW && (attr & ATTR_BOLD)) {
@@ -4213,7 +4218,7 @@ void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
  * Wrapper that handles combining characters.
  */
 void do_text(Context ctx, int x, int y, wchar_t *text, int len,
-	     unsigned long attr, int lattr)
+	     unsigned long long attr, int lattr)
 {
     if (attr & TATTR_COMBINING) {
 	unsigned long a = 0;
@@ -4254,7 +4259,7 @@ void do_text(Context ctx, int x, int y, wchar_t *text, int len,
 }
 
 void do_cursor(Context ctx, int x, int y, wchar_t *text, int len,
-	       unsigned long attr, int lattr)
+	       unsigned long long attr, int lattr)
 {
 
     int fnt_width;

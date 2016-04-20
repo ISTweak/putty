@@ -63,7 +63,7 @@ typedef struct terminal_tag Terminal;
 
 #define DATTR_STARTRUN      0x80000000UL   /* start of redraw run */
 
-#define TDATTR_MASK         0xF0000000UL
+#define TDATTR_MASK         0xF0000000ULL
 #define TATTR_MASK (TDATTR_MASK)
 #define DATTR_MASK (TDATTR_MASK)
 
@@ -77,7 +77,7 @@ typedef struct terminal_tag Terminal;
 					  wrapped to next line, so last
 					  single-width cell is empty */
 
-#define ATTR_INVALID 0x03FFFFU
+#define ATTR_INVALID 0x03FFFFUL
 
 /* Like Linux use the F000 page for direct to font. */
 #define CSET_OEMCP   0x0000F000UL      /* OEM Codepage DTF */
@@ -698,8 +698,8 @@ void free_prompts(prompts_t *p);
  * Exports from the front end.
  */
 void request_resize(void *frontend, int, int);
-void do_text(Context, int, int, wchar_t *, int, unsigned long, int);
-void do_cursor(Context, int, int, wchar_t *, int, unsigned long, int);
+void do_text(Context, int, int, wchar_t *, int, unsigned long long, int);
+void do_cursor(Context, int, int, wchar_t *, int, unsigned long long, int);
 int char_width(Context ctx, int uc);
 #ifdef OPTIMISE_SCROLL
 void do_scroll(Context, int, int, int);
@@ -1064,7 +1064,7 @@ void cleanup_exit(int);
 enum config_primary_key { CONFIG_OPTIONS(CONF_ENUM_DEF) N_CONFIG_OPTIONS };
 #undef CONF_ENUM_DEF
 
-#define NCFGCOLOURS 22 /* number of colours in CONF_colours above */
+#define NCFGCOLOURS 24 /* number of colours in CONF_colours above */
 
 /* Functions handling configuration structures. */
 Conf *conf_new(void);		       /* create an empty configuration */

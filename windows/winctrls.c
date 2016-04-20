@@ -1163,27 +1163,54 @@ void progressbar(struct ctlpos *cp, int id)
  */
 static char *shortcut_escape(const char *text, char shortcut)
 {
+	int text_len;
     char *ret;
     char const *p;
     char *q;
+    char *r, lastchar = '\0';
+    int search;
 
     if (!text)
 	return NULL;		       /* sfree won't choke on this */
 
-    ret = snewn(2*strlen(text)+1, char);   /* size potentially doubles! */
+	text_len = strlen(text);
+	ret = snewn(text_len > 4 ? 2*text_len+1 : text_len + 5, char);   /* size potentially doubles! */
     shortcut = tolower((unsigned char)shortcut);
 
     p = text;
+    search = 1;
+    while (*p) {
+	 r = CharNext (p);
+	 if (r - p > 1) {
+	      search = 0;
+	      break;
+	 }
+	 p = r;
+    }
+    p = text;
     q = ret;
     while (*p) {
-	if (shortcut != NO_SHORTCUT &&
+	if (search && shortcut != NO_SHORTCUT &&
 	    tolower((unsigned char)*p) == shortcut) {
 	    *q++ = '&';
 	    shortcut = NO_SHORTCUT;    /* stop it happening twice */
 	} else if (*p == '&') {
 	    *q++ = '&';
 	}
+	lastchar = *p;
+	r = CharNext (p);
+	while (p != r)
 	     *q++ = *p++;
+    }
+    if (shortcut != NO_SHORTCUT) { /* Japanese style shortcut */
+	 if (lastchar == ':')
+	      q--;
+	 *q++ = '(';
+	 *q++ = '&';
+	 *q++ = toupper(shortcut);
+	 *q++ = ')';
+	 if (lastchar == ':')
+	      *q++ = lastchar;
     }
     *q = '\0';
     return ret;

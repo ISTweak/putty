@@ -734,7 +734,7 @@ int do_reconfig(HWND hwnd, int protcfginfo)
     dlg_auto_set_fixed_pitch_flag(&dp);
     dp.shortcuts['g'] = TRUE;	       /* the treeview: `Cate&gory' */
 
-    ret = SaneDialogBox(hinst, MAKEINTRESOURCE(IDD_MAINBOX), NULL,
+    ret = SaneDialogBox(hinst, MAKEINTRESOURCE(IDD_MAINBOX), hwnd,
 		  GenericMainDlgProc);
 
     ctrl_free_box(ctrlbox);
