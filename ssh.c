@@ -708,7 +708,7 @@ static void ssh2_bare_connection_protocol_setup(Ssh ssh);
 static void ssh_size(void *handle, int width, int height);
 static void ssh_special(void *handle, Telnet_Special);
 static int ssh2_try_send(struct ssh_channel *c);
-static void ssh2_add_channel_data(struct ssh_channel *c,
+static int ssh_send_channel_data(struct ssh_channel *c,
                                   const char *buf, int len);
 static void ssh_throttle_all(Ssh ssh, int enable, int bufsize);
 static void ssh2_set_window(struct ssh_channel *c, int newwin);
@@ -3824,7 +3824,6 @@ static void ssh_dialog_callback(void *sshv, int ret)
 static void ssh_agentf_callback(void *cv, void *reply, int replylen)
 {
     struct ssh_channel *c = (struct ssh_channel *)cv;
-    Ssh ssh = c->ssh;
     const void *sentreply = reply;
 
     c->u.a.outstanding_requests--;
@@ -3833,16 +3832,7 @@ static void ssh_agentf_callback(void *cv, void *reply, int replylen)
 	sentreply = "\0\0\0\1\5";
 	replylen = 5;
     }
-    if (ssh->version == 2) {
-	ssh2_add_channel_data(c, sentreply, replylen);
-	ssh2_try_send(c);
-    } else {
-	send_packet(ssh, SSH1_MSG_CHANNEL_DATA,
-		    PKT_INT, c->remoteid,
-		    PKT_INT, replylen,
-		    PKT_DATA, sentreply, replylen,
-		    PKT_END);
-    }
+    ssh_send_channel_data(c, sentreply, replylen);
     if (reply)
 	sfree(reply);
     /*
@@ -5018,23 +5008,7 @@ int sshfwd_write(struct ssh_channel *c, char *buf, int len)
     if (ssh->state == SSH_STATE_CLOSED)
 	return 0;
 
-    if (ssh->version == 1) {
-	send_packet(ssh, SSH1_MSG_CHANNEL_DATA,
-		    PKT_INT, c->remoteid,
-		    PKT_INT, len, PKT_DATA, buf, len,
-		    PKT_END);
-	/*
-	 * In SSH-1 we can return 0 here - implying that forwarded
-	 * connections are never individually throttled - because
-	 * the only circumstance that can cause throttling will be
-	 * the whole SSH connection backing up, in which case
-	 * _everything_ will be throttled as a whole.
-	 */
-	return 0;
-    } else {
-	ssh2_add_channel_data(c, buf, len);
-	return ssh2_try_send(c);
-    }
+    return ssh_send_channel_data(c, buf, len);
 }
 
 void sshfwd_unthrottle(struct ssh_channel *c, int bufsize)
@@ -5751,6 +5725,48 @@ static void ssh1_msg_channel_close(Ssh ssh, struct Packet *pktin)
     }
 }
 
+/*
+ * Handle incoming data on an SSH-1 or SSH-2 agent-forwarding channel.
+ */
+static int ssh_agent_channel_data(struct ssh_channel *c, char *data,
+				  int length)
+{
+    while (length > 0) {
+	if (c->u.a.lensofar < 4) {
+	    unsigned int l = min(4 - c->u.a.lensofar, (unsigned)length);
+	    memcpy(c->u.a.msglen + c->u.a.lensofar, data, l);
+	    data += l;
+	    length -= l;
+	    c->u.a.lensofar += l;
+	}
+	if (c->u.a.lensofar == 4) {
+	    c->u.a.totallen = 4 + GET_32BIT(c->u.a.msglen);
+	    c->u.a.message = snewn(c->u.a.totallen, unsigned char);
+	    memcpy(c->u.a.message, c->u.a.msglen, 4);
+	}
+	if (c->u.a.lensofar >= 4 && length > 0) {
+	    unsigned int l = min(c->u.a.totallen - c->u.a.lensofar,
+				 (unsigned)length);
+	    memcpy(c->u.a.message + c->u.a.lensofar, data, l);
+	    data += l;
+	    length -= l;
+	    c->u.a.lensofar += l;
+	}
+	if (c->u.a.lensofar == c->u.a.totallen) {
+	    void *reply;
+	    int replylen;
+            c->u.a.outstanding_requests++;
+	    if (agent_query(c->u.a.message, c->u.a.totallen, &reply, &replylen,
+			    ssh_agentf_callback, c))
+		ssh_agentf_callback(c, reply, replylen);
+	    sfree(c->u.a.message);
+            c->u.a.message = NULL;
+	    c->u.a.lensofar = 0;
+	}
+    }
+    return 0;   /* agent channels never back up */
+}
+
 static void ssh1_msg_channel_data(Ssh ssh, struct Packet *pktin)
 {
     /* Data sent down one of our channels. */
@@ -5772,47 +5788,7 @@ static void ssh1_msg_channel_data(Ssh ssh, struct Packet *pktin)
 	    bufsize = pfd_send(c->u.pfd.pf, p, len);
 	    break;
 	  case CHAN_AGENT:
-	    /* Data for an agent message. Buffer it. */
-	    while (len > 0) {
-		if (c->u.a.lensofar < 4) {
-		    unsigned int l = min(4 - c->u.a.lensofar, (unsigned)len);
-		    memcpy(c->u.a.msglen + c->u.a.lensofar, p,
-			   l);
-		    p += l;
-		    len -= l;
-		    c->u.a.lensofar += l;
-		}
-		if (c->u.a.lensofar == 4) {
-		    c->u.a.totallen =
-			4 + GET_32BIT(c->u.a.msglen);
-		    c->u.a.message = snewn(c->u.a.totallen,
-					   unsigned char);
-		    memcpy(c->u.a.message, c->u.a.msglen, 4);
-		}
-		if (c->u.a.lensofar >= 4 && len > 0) {
-		    unsigned int l =
-			min(c->u.a.totallen - c->u.a.lensofar,
-			    (unsigned)len);
-		    memcpy(c->u.a.message + c->u.a.lensofar, p,
-			   l);
-		    p += l;
-		    len -= l;
-		    c->u.a.lensofar += l;
-		}
-		if (c->u.a.lensofar == c->u.a.totallen) {
-		    void *reply;
-		    int replylen;
-                    c->u.a.outstanding_requests++;
-		    if (agent_query(c->u.a.message,
-				    c->u.a.totallen,
-				    &reply, &replylen,
-				    ssh_agentf_callback, c))
-			ssh_agentf_callback(c, reply, replylen);
-		    sfree(c->u.a.message);
-		    c->u.a.lensofar = 0;
-		}
-	    }
-	    bufsize = 0;   /* agent channels never back up */
+	    bufsize = ssh_agent_channel_data(c, p, len);
 	    break;
 	}
 	if (!c->throttling_conn && bufsize > SSH1_BUFFER_LIMIT) {
@@ -7700,12 +7676,30 @@ static void do_ssh2_transport(Ssh ssh, const void *vin, int inlen,
 }
 
 /*
- * Add data to an SSH-2 channel output buffer.
+ * Send data on an SSH channel.  In SSH-2, this involves buffering it
+ * first.
  */
-static void ssh2_add_channel_data(struct ssh_channel *c, const char *buf,
+static int ssh_send_channel_data(struct ssh_channel *c, const char *buf,
 				  int len)
 {
+    if (c->ssh->version == 2) {
     bufchain_add(&c->v.v2.outbuffer, buf, len);
+	return ssh2_try_send(c);
+    } else {
+	send_packet(c->ssh, SSH1_MSG_CHANNEL_DATA,
+		    PKT_INT, c->remoteid,
+		    PKT_INT, len,
+		    PKT_DATA, buf, len,
+		    PKT_END);
+	/*
+	 * In SSH-1 we can return 0 here - implying that channels are
+	 * never individually throttled - because the only
+	 * circumstance that can cause throttling will be the whole
+	 * SSH connection backing up, in which case _everything_ will
+	 * be throttled as a whole.
+	 */
+	return 0;
+    }
 }
 
 /*
@@ -8079,48 +8073,7 @@ static void ssh2_msg_channel_data(Ssh ssh, struct Packet *pktin)
 	    bufsize = pfd_send(c->u.pfd.pf, data, length);
 	    break;
 	  case CHAN_AGENT:
-	    while (length > 0) {
-		if (c->u.a.lensofar < 4) {
-		    unsigned int l = min(4 - c->u.a.lensofar,
-					 (unsigned)length);
-		    memcpy(c->u.a.msglen + c->u.a.lensofar,
-			   data, l);
-		    data += l;
-		    length -= l;
-		    c->u.a.lensofar += l;
-		}
-		if (c->u.a.lensofar == 4) {
-		    c->u.a.totallen =
-			4 + GET_32BIT(c->u.a.msglen);
-		    c->u.a.message = snewn(c->u.a.totallen,
-					   unsigned char);
-		    memcpy(c->u.a.message, c->u.a.msglen, 4);
-		}
-		if (c->u.a.lensofar >= 4 && length > 0) {
-		    unsigned int l =
-			min(c->u.a.totallen - c->u.a.lensofar,
-			    (unsigned)length);
-		    memcpy(c->u.a.message + c->u.a.lensofar,
-			   data, l);
-		    data += l;
-		    length -= l;
-		    c->u.a.lensofar += l;
-		}
-		if (c->u.a.lensofar == c->u.a.totallen) {
-		    void *reply;
-		    int replylen;
-                    c->u.a.outstanding_requests++;
-		    if (agent_query(c->u.a.message,
-				    c->u.a.totallen,
-				    &reply, &replylen,
-				    ssh_agentf_callback, c))
-			ssh_agentf_callback(c, reply, replylen);
-		    sfree(c->u.a.message);
-                    c->u.a.message = NULL;
-		    c->u.a.lensofar = 0;
-		}
-	    }
-	    bufsize = 0;
+	    bufsize = ssh_agent_channel_data(c, data, length);
 	    break;
 	}
 	/*
@@ -9227,7 +9180,6 @@ static void do_ssh2_authconn(Ssh ssh, const unsigned char *in, int inlen,
 	int pklen, alglen, commentlen;
 	int siglen, retlen, len;
 	char *q, *agentreq, *ret;
-	int try_send;
 	struct Packet *pktout;
 	Filename *keyfile;
 #ifndef NO_GSSAPI
@@ -10880,7 +10832,6 @@ static void do_ssh2_authconn(Ssh ssh, const unsigned char *in, int inlen,
 	ssh->send_ok = 1;
     while (1) {
 	crReturnV;
-	s->try_send = FALSE;
 	if (pktin) {
 
 	    /*
@@ -10895,18 +10846,7 @@ static void do_ssh2_authconn(Ssh ssh, const unsigned char *in, int inlen,
 	    /*
 	     * We have spare data. Add it to the channel buffer.
 	     */
-	    ssh2_add_channel_data(ssh->mainchan, (char *)in, inlen);
-	    s->try_send = TRUE;
-	}
-	if (s->try_send) {
-	    int i;
-	    struct ssh_channel *c;
-	    /*
-	     * Try to send data on all channels if we can.
-	     */
-	    for (i = 0; NULL != (c = index234(ssh->channels, i)); i++)
-                if (c->type != CHAN_SHARING)
-                    ssh2_try_send_and_unthrottle(ssh, c);
+	    ssh_send_channel_data(ssh->mainchan, (char *)in, inlen);
 	}
     }
 
@@ -11264,7 +11204,6 @@ static const char *ssh_init(void *frontend_handle, void **backend_handle,
     ssh->protocol_initial_phase_done = FALSE;
 
     ssh->pinger = NULL;
-    ssh->fullhostname = NULL;
 
     ssh->incoming_data_size = ssh->outgoing_data_size =
 	ssh->deferred_data_size = 0L;
@@ -11276,7 +11215,7 @@ static const char *ssh_init(void *frontend_handle, void **backend_handle,
     ssh->gsslibs = NULL;
 #endif
 
-    random_ref();
+    random_ref(); /* do this now - may be needed by sharing setup code */
 
     p = connect_to_host(ssh, host, port, realhost, nodelay, keepalive);
     if (p != NULL) {
