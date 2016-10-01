@@ -11,6 +11,7 @@
 #include <dlfcn.h>		       /* Dynamic library loading */
 #endif /*  NO_LIBDL */
 #include "charset.h"
+#include <sys/types.h>         /* for mode_t */
 
 #ifdef OSX_GTK
 /*
@@ -74,7 +75,7 @@ typedef uint32_t uint32; /* C99: uint32_t defined in stdint.h */
 #define SEL_NL { 10 }
 
 /* Simple wraparound timer function */
-unsigned long getticks(void);	       /* based on gettimeofday(2) */
+unsigned long getticks(void);
 #define GETTICKCOUNT getticks
 #define TICKSPERSEC    1000	       /* we choose to use milliseconds */
 #define CURSORBLINK     450	       /* no standard way to set this */
@@ -197,6 +198,7 @@ void noncloexec(int);
 int nonblock(int);
 int no_nonblock(int);
 char *make_dir_and_check_ours(const char *dirname);
+char *make_dir_path(const char *path, mode_t mode);
 
 /*
  * Exports from unicode.c.

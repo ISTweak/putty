@@ -303,6 +303,11 @@ void frontend_echoedit_update(void *frontend, int echo, int edit)
 {
 }
 
+int frontend_is_utf8(void *frontend)
+{
+    return ucsdata.line_codepage == CP_UTF8;
+}
+
 char *get_ttymode(void *frontend, const char *mode)
 {
     return term_get_ttymode(term, mode);
@@ -429,6 +434,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     HRESULT hr;
     int guess_width, guess_height;
 
+	dll_hijacking_protection();
+
     hinst = inst;
     hwnd = NULL;
     flags = FLAG_VERBOSE | FLAG_INTERACTIVE;
@@ -436,6 +443,11 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     sk_init();
 
     InitCommonControls();
+
+    /* Set Explicit App User Model Id so that jump lists don't cause
+       PuTTY to hang on to removable media. */
+
+    set_explicit_app_user_model_id();
 
     /* Ensure a Maximize setting in Explorer doesn't maximise the
      * config box. */
