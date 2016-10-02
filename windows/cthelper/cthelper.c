@@ -38,6 +38,8 @@
 
 #include "debug.h"
 
+extern char	*ptsname(int);	/* prototype not in any system header */
+
 /* Buffer sizes */
 enum {
   CTLBUF = 32,
