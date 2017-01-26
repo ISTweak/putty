@@ -303,10 +303,12 @@ static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
 	}
 
         {
+            char *buildinfo_text = buildinfo("\r\n");
             char *text = dupprintf
-                ("PuTTYgen\r\n\r\n%s\r\n\r\n%s",
-                 ver,
-                 "\251 " SHORT_COPYRIGHT_DETAILS ". All rights reserved.");
+                ("PuTTYgen\r\n\r\n%s\r\n\r\n%s\r\n\r\n%s",
+                 ver, buildinfo_text,
+                 "(c) " SHORT_COPYRIGHT_DETAILS ". All rights reserved.");
+            sfree(buildinfo_text);
             SetDlgItemText(hwnd, 1000, text);
             sfree(text);
         }
@@ -1121,6 +1123,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
                 } else if (IsDlgButtonChecked(hwnd, IDC_KEYSSH2ED25519)) {
                     state->keytype = ED25519;
                 }
+
 		if ((state->keytype == RSA || state->keytype == DSA) &&
                     state->key_bits < 256) {
                     char *message = dupprintf
@@ -1523,7 +1526,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     char **argv;
     int ret;
 
-	dll_hijacking_protection();
+    dll_hijacking_protection();
 
     InitCommonControls();
     hinst = inst;

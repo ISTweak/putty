@@ -68,7 +68,7 @@ void force_normal(HWND hwnd)
 }
 
 static INT_PTR CALLBACK LogProc(HWND hwnd, UINT msg,
-			    WPARAM wParam, LPARAM lParam)
+                                WPARAM wParam, LPARAM lParam)
 {
     int i;
 
@@ -164,7 +164,7 @@ static INT_PTR CALLBACK LogProc(HWND hwnd, UINT msg,
 }
 
 static INT_PTR CALLBACK LicenceProc(HWND hwnd, UINT msg,
-				WPARAM wParam, LPARAM lParam)
+                                    WPARAM wParam, LPARAM lParam)
 {
     switch (msg) {
       case WM_INITDIALOG:
@@ -192,7 +192,7 @@ static INT_PTR CALLBACK LicenceProc(HWND hwnd, UINT msg,
 }
 
 static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
-			      WPARAM wParam, LPARAM lParam)
+                                  WPARAM wParam, LPARAM lParam)
 {
     char *str;
 
@@ -202,10 +202,12 @@ static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
 	SetWindowText(hwnd, str);
 	sfree(str);
         {
+            char *buildinfo_text = buildinfo("\r\n");
             char *text = dupprintf
-                ("%s\r\n\r\n%s\r\n\r\n%s",
-                 appname, ver,
+                ("%s\r\n\r\n%s\r\n\r\n%s\r\n\r\n%s",
+                 appname, ver, buildinfo_text,
                  "(c) " SHORT_COPYRIGHT_DETAILS ". All rights reserved.");
+            sfree(buildinfo_text);
             SetDlgItemText(hwnd, IDA_TEXT, text);
 			l10n_created_window (hwnd);
             sfree(text);
@@ -296,7 +298,7 @@ static void SaneEndDialog(HWND hwnd, int ret)
  * Null dialog procedure.
  */
 static INT_PTR CALLBACK NullDlgProc(HWND hwnd, UINT msg,
-				WPARAM wParam, LPARAM lParam)
+                                    WPARAM wParam, LPARAM lParam)
 {
     return 0;
 }
@@ -381,7 +383,7 @@ static void create_controls(HWND hwnd, char *path)
  * dialog processing should be performed, and 1 if it should not.)
  */
 static INT_PTR CALLBACK GenericMainDlgProc(HWND hwnd, UINT msg,
-				       WPARAM wParam, LPARAM lParam)
+                                           WPARAM wParam, LPARAM lParam)
 {
     HWND hw, treeview;
     struct treeview_faff tvfaff;
@@ -734,7 +736,7 @@ int do_reconfig(HWND hwnd, int protcfginfo)
     dlg_auto_set_fixed_pitch_flag(&dp);
     dp.shortcuts['g'] = TRUE;	       /* the treeview: `Cate&gory' */
 
-    ret = SaneDialogBox(hinst, MAKEINTRESOURCE(IDD_MAINBOX), hwnd,
+    ret = SaneDialogBox(hinst, MAKEINTRESOURCE(IDD_MAINBOX), NULL,
 		  GenericMainDlgProc);
 
     ctrl_free_box(ctrlbox);

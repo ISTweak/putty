@@ -134,6 +134,20 @@
 # ------------------------------------------------------------
 # Additional text added verbatim to each individual Makefile.
 
+!cflags am version
+!begin am
+if AUTO_GIT_COMMIT
+BUILT_SOURCES = empty.h
+CLEANFILES = empty.h
+libversion_a_CFLAGS += -DSOURCE_COMMIT=\"`git --git-dir=$(srcdir)/.git rev-parse HEAD 2>/dev/null`\"
+empty.h: $(allsources)
+	echo '/* Empty file touched by automake makefile to force rebuild of version.o */' >$@
+endif
+!end
+!begin >empty.h
+/* Empty file touched by automake makefile to force rebuild of version.o */
+!end
+
 !begin vc vars
 CFLAGS = $(CFLAGS) /DHAS_GSSAPI
 !end
@@ -360,11 +374,11 @@ puttyapp : [XT] GTKTERM uxmisc misc ldisc settings uxsel U_BE_ALL uxstore
          + xpmpucfg gtkapp
 osxlaunch : [UT] osxlaunch
 
-fuzzterm : [UT] UXTERM CHARSET misc uxmisc uxucs fuzzterm time settings
+fuzzterm : [UT] UXTERM CHARSET misc version uxmisc uxucs fuzzterm time settings
 	 + uxstore be_none
          + uxl10n
-testbn   : [UT] testbn sshbn misc conf tree234 uxmisc
-testbn   : [C] testbn sshbn misc conf tree234 winmisc LIBS
+testbn   : [UT] testbn sshbn misc version conf tree234 uxmisc
+testbn   : [C] testbn sshbn misc version conf tree234 winmisc LIBS
 
 # ----------------------------------------------------------------------
 # On Windows, provide a means of removing local test binaries that we

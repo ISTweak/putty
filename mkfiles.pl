@@ -646,7 +646,7 @@ if (defined $makefiles{'vc'}) {
       "CFLAGS = /nologo /W3 /O1 " .
       (join " ", map {"-I$dirpfx$_"} @srcdirs) .
       " /D_WINDOWS /D_WIN32_WINDOWS=0x500 /DWINVER=0x500 /D_CRT_SECURE_NO_WARNINGS\n".
-      "LFLAGS = /incremental:no /fixed\n".
+      "LFLAGS = /incremental:no /dynamicbase /nxcompat\n".
       "RCFLAGS = ".(join " ", map {"-I$dirpfx$_"} @srcdirs).
       " -DWIN32 -D_WIN32 -DWINVER=0x0400\n".
       "\n".
@@ -676,7 +676,7 @@ if (defined $makefiles{'vc'}) {
 	    print "$objlines[$i]\n";
 	}
 	print "<<\n";
-	print "\tlink \$(LFLAGS) \$(XLFLAGS) -out:\$(BUILDDIR)$prog.exe -map:\$(BUILDDIR)$prog.map -nologo -subsystem:$subsys \@$inlinefilename\n\n";
+	print "\tlink \$(LFLAGS) \$(XLFLAGS) -out:\$(BUILDDIR)$prog.exe -map:\$(BUILDDIR)$prog.map -nologo -subsystem:$subsys\$(SUBSYSVER) \@$inlinefilename\n\n";
     }
     foreach $d (&deps("\$(BUILDDIR)X.obj", "\$(BUILDDIR)X.res", $dirpfx, "\\", "vc")) {
         $extradeps = $forceobj{$d->{obj_orig}} ? ["*.c","*.h","*.rc"] : [];

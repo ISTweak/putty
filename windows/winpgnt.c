@@ -152,10 +152,12 @@ static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
     switch (msg) {
       case WM_INITDIALOG:
         {
+            char *buildinfo_text = buildinfo("\r\n");
             char *text = dupprintf
-                ("Pageant\r\n\r\n%s\r\n\r\n%s",
-                 ver,
-                 "\251 " SHORT_COPYRIGHT_DETAILS ". All rights reserved.");
+                ("Pageant\r\n\r\n%s\r\n\r\n%s\r\n\r\n%s",
+                 ver, buildinfo_text,
+                 "(c) " SHORT_COPYRIGHT_DETAILS ". All rights reserved.");
+            sfree(buildinfo_text);
             SetDlgItemText(hwnd, 1000, text);
             sfree(text);
         }
@@ -301,7 +303,8 @@ void keylist_update(void)
 	for (i = 0; NULL != (skey = pageant_nth_ssh2_key(i)); i++) {
 	    char *listentry, *p;
 	    int pos;
-	    /*
+
+            /*
              * For nice alignment in the list box, we would ideally
              * want every entry to align to the tab stop settings, and
              * have a column for algorithm name, one for bit count,
@@ -324,7 +327,8 @@ void keylist_update(void)
              * one you haven't already exceeded, so I have to guess
              * when the key type will overflow past the bit-count tab
              * stop and leave out a tab character. Urgh.
-	     */
+             */
+
 	    p = ssh2_fingerprint(skey->alg, skey->data);
             listentry = dupprintf("%s\t%s", p, skey->comment);
             sfree(p);
@@ -1070,7 +1074,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     int argc, i;
     char **argv, **argstart;
 
-	dll_hijacking_protection();
+    dll_hijacking_protection();
 
     hinst = inst;
     hwnd = NULL;

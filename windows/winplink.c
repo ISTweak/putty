@@ -223,7 +223,9 @@ static void usage(void)
 
 static void version(void)
 {
-    printf("plink: %s\n", ver);
+    char *buildinfo_text = buildinfo("\n");
+    printf("plink: %s\n%s\n", ver, buildinfo_text);
+    sfree(buildinfo_text);
     exit(1);
 }
 
@@ -315,7 +317,7 @@ int main(int argc, char **argv)
     int just_test_share_exists = FALSE;
     unsigned long now, next, then;
 
-	dll_hijacking_protection();
+    dll_hijacking_protection();
 
     sklist = NULL;
     skcount = sksize = 0;
