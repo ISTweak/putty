@@ -698,8 +698,8 @@ void free_prompts(prompts_t *p);
  * Exports from the front end.
  */
 void request_resize(void *frontend, int, int);
-void do_text(Context, int, int, wchar_t *, int, unsigned long long, int);
-void do_cursor(Context, int, int, wchar_t *, int, unsigned long long, int);
+void do_text(Context, int, int, wchar_t *, int, unsigned long, int);
+void do_cursor(Context, int, int, wchar_t *, int, unsigned long, int);
 int char_width(Context ctx, int uc);
 #ifdef OPTIMISE_SCROLL
 void do_scroll(Context, int, int, int);
@@ -773,6 +773,7 @@ enum {
     BUSY_CPU	    /* Locally busy (e.g. crypto); user interaction suspended */
 };
 void set_busy_status(void *frontend, int status);
+int frontend_is_utf8(void *frontend);
 void reset_colour(void *frontend, int number);
 void set_colour(void *frontend, int number, int colour);
 int get_colour(void *frontend, int number);
@@ -1360,17 +1361,32 @@ void crypto_wrapup();
 /*
  * Exports from pageantc.c.
  * 
- * agent_query returns 1 for here's-a-response, and 0 for query-in-
- * progress. In the latter case there will be a call to `callback'
- * at some future point, passing callback_ctx as the first
+ * agent_query returns NULL for here's-a-response, and non-NULL for
+ * query-in- progress. In the latter case there will be a call to
+ * `callback' at some future point, passing callback_ctx as the first
  * parameter and the actual reply data as the second and third.
  * 
  * The response may be a NULL pointer (in either of the synchronous
  * or asynchronous cases), which indicates failure to receive a
  * response.
+ *
+ * When the return from agent_query is not NULL, it identifies the
+ * in-progress query in case it needs to be cancelled. If
+ * agent_cancel_query is called, then the pending query is destroyed
+ * and the callback will not be called. (E.g. if you're going to throw
+ * away the thing you were using as callback_ctx.)
+ *
+ * Passing a null pointer as callback forces agent_query to behave
+ * synchronously, i.e. it will block if necessary, and guarantee to
+ * return NULL. The wrapper function agent_query_synchronous() makes
+ * this easier.
  */
-int agent_query(void *in, int inlen, void **out, int *outlen,
-		void (*callback)(void *, void *, int), void *callback_ctx);
+typedef struct agent_pending_query agent_pending_query;
+agent_pending_query *agent_query(
+    void *in, int inlen, void **out, int *outlen,
+    void (*callback)(void *, void *, int), void *callback_ctx);
+void agent_cancel_query(agent_pending_query *);
+void agent_query_synchronous(void *in, int inlen, void **out, int *outlen);
 int agent_exists(void);
 
 /*

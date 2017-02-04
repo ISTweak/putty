@@ -491,21 +491,6 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     }
 
     /*
-     * Protect our process
-     */
-    {
-#if !defined UNPROTECT && !defined NO_SECURITY
-        char *error = NULL;
-        if (! setprocessacl(error)) {
-            char *message = dupprintf("Could not restrict process ACL: %s",
-                                      error);
-	    logevent(NULL, message);
-            sfree(message);
-	    sfree(error);
-	}
-#endif
-    }
-    /*
      * Process the command line.
      */
     {
@@ -560,11 +545,20 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	 * Process a couple of command-line options which are more
 	 * easily dealt with before the line is broken up into words.
 	 * These are the old-fashioned but convenient @sessionname and
-	 * the internal-use-only &sharedmemoryhandle, neither of which
-	 * are combined with anything else.
+	 * the internal-use-only &sharedmemoryhandle, plus the &R
+	 * prefix for -restrict-acl, all of which are used by PuTTYs
+	 * auto-launching each other via System-menu options.
 	 */
 	while (*p && isspace(*p))
 	    p++;
+        if (*p == '&' && p[1] == 'R' &&
+            (!p[2] || p[2] == '@' || p[2] == '&')) {
+            /* &R restrict-acl prefix */
+            restrict_process_acl();
+            restricted_acl = TRUE;
+            p += 2;
+        }
+
 	if (*p == '@') {
             /*
              * An initial @ means that the whole of the rest of the
@@ -602,12 +596,20 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 		cleanup_exit(0);
 	    }
 	    allow_launch = TRUE;
-	} else {
+	} else if (!*p) {
+            /* Do-nothing case for an empty command line - or rather,
+             * for a command line that's empty _after_ we strip off
+             * the &R prefix. */
+        } else {
 	    /*
 	     * Otherwise, break up the command line and deal with
 	     * it sensibly.
 	     */
-	    int i;
+	    int argc, i;
+	    char **argv;
+	    
+	    split_into_argv(cmdline, &argc, &argv, NULL);
+
 	    for (i = 0; i < argc; i++) {
 		char *p = argv[i];
 		int ret;
@@ -2440,12 +2442,17 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
 	  case IDM_SAVEDSESS:
 	    {
 		char b[2048];
-		char c[30], *cl;
-		int freecl = FALSE;
+		char *cl;
+                const char *argprefix;
 		BOOL inherit_handles;
 		STARTUPINFO si;
 		PROCESS_INFORMATION pi;
 		HANDLE filemap = NULL;
+
+                if (restricted_acl)
+                    argprefix = "&R";
+                else
+                    argprefix = "";
 
 		if (wParam == IDM_DUPSESS) {
 		    /*
@@ -2473,20 +2480,21 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
 			}
 		    }
 		    inherit_handles = TRUE;
-		    sprintf(c, "putty &%p:%u", filemap, (unsigned)size);
-		    cl = c;
+		    cl = dupprintf("putty %s&%p:%u", argprefix,
+                                   filemap, (unsigned)size);
 		} else if (wParam == IDM_SAVEDSESS) {
 		    unsigned int sessno = ((lParam - IDM_SAVED_MIN)
 					   / MENU_SAVED_STEP) + 1;
 		    if (sessno < (unsigned)sesslist.nsessions) {
 			const char *session = sesslist.sessions[sessno];
-			cl = dupprintf("putty @%s", session);
+			cl = dupprintf("putty %s@%s", argprefix, session);
 			inherit_handles = FALSE;
-			freecl = TRUE;
 		    } else
 			break;
 		} else /* IDM_NEWSESS */ {
-		    cl = NULL;
+                    cl = dupprintf("putty%s%s",
+                                   *argprefix ? " " : "",
+                                   argprefix);
 		    inherit_handles = FALSE;
 		}
 
@@ -2505,8 +2513,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
 
 		if (filemap)
 		    CloseHandle(filemap);
-		if (freecl)
-		    sfree(cl);
+                sfree(cl);
 	    }
 	    break;
 	  case IDM_RESTART:
@@ -3493,7 +3500,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
 		     */
 		    term_seen_key_event(term);
 		    if (ldisc)
-			ldisc_send(ldisc, buf, len, 1);
+			ldisc_send(ldisc, (char *)buf, len, 1);
 		    show_mouseptr(0);
 		}
 	    }
@@ -3575,7 +3582,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
 
       case WM_IME_CHAR:
 	if (wParam & 0xFF00) {
-	    unsigned char buf[2];
+	    char buf[2];
 
 	    buf[1] = wParam;
 	    buf[0] = wParam >> 8;
@@ -3830,7 +3837,7 @@ static void sys_cursor_update(void)
  * We are allowed to fiddle with the contents of `text'.
  */
 void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
-		      unsigned long long attr, int lattr)
+		      unsigned long attr, int lattr)
 {
     COLORREF fg, bg, t;
     int nfg, nbg, nfont;
@@ -4230,7 +4237,7 @@ void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
  * Wrapper that handles combining characters.
  */
 void do_text(Context ctx, int x, int y, wchar_t *text, int len,
-	     unsigned long long attr, int lattr)
+	     unsigned long attr, int lattr)
 {
     if (attr & TATTR_COMBINING) {
 	unsigned long a = 0;
@@ -4271,7 +4278,7 @@ void do_text(Context ctx, int x, int y, wchar_t *text, int len,
 }
 
 void do_cursor(Context ctx, int x, int y, wchar_t *text, int len,
-	       unsigned long long attr, int lattr)
+	       unsigned long attr, int lattr)
 {
 
     int fnt_width;
@@ -5088,7 +5095,7 @@ static int TranslateKey(UINT message, WPARAM wParam, LPARAM lParam,
 		break;
 	    }
 	    if (xkey) {
-		p += format_arrow_key(p, term, xkey, shift_state);
+		p += format_arrow_key((char *)p, term, xkey, shift_state);
 		return p - output;
 	    }
 	}

@@ -244,7 +244,7 @@ int seek_file(WFile *f, uint64 offset, int whence)
 uint64 get_file_posn(WFile *f)
 {
     uint64 ret;
-    LONG lo, hi;
+    LONG lo, hi = 0;
 
     lo = SetFilePointer(f->h, 0L, &hi, FILE_CURRENT);
     ret.lo = lo;
@@ -749,21 +749,6 @@ char *ssh_sftp_get_cmdline(const char *prompt, int no_fds_ok)
 
 void platform_psftp_post_option_setup(void)
 {
-#if !defined UNPROTECT && !defined NO_SECURITY
-    /*
-     * Protect our process.
-     */
-    {
-        char *error = NULL;
-        if (!setprocessacl(error)) {
-            char *message = dupprintf("Could not restrict process ACL: %s",
-                                      error);
-            logevent(NULL, message);
-            sfree(message);
-            sfree(error);
-        }
-    }
-#endif
 }
 
 extern int use_inifile;
