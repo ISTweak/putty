@@ -12,6 +12,7 @@
 # Overall project name.
 !name putty
 # Locations and types of output Makefiles.
+!makefile clangcl windows/Makefile.clangcl
 !makefile vc windows/Makefile.vc
 !makefile vcproj windows/MSVC
 !makefile cygwin windows/Makefile.mgw
@@ -107,10 +108,6 @@
 #  - XFLAGS=/DDEBUG
 #      Causes PuTTY to enable internal debugging.
 #
-#  - XFLAGS=/DUNPROTECT
-#      Disable tightened ACL on PuTTY process so that e.g. debuggers
-#      can attach to it.
-#
 #  - XFLAGS=/DMALLOC_LOG
 #      Causes PuTTY to emit a file called putty_mem.log, logging every
 #      memory allocation and free, so you can track memory leaks.
@@ -149,6 +146,10 @@ endif
 
 !begin vc vars
 CFLAGS = $(CFLAGS) /DHAS_GSSAPI
+!end
+
+!begin clangcl vars
+CFLAGS += /DHAS_GSSAPI
 !end
 
 # `make install' target for Unix.
@@ -386,4 +387,8 @@ testbn   : [C] testbn sshbn misc version conf tree234 winmisc LIBS
 !begin vc
 cleantestprogs:
 	-del $(BUILDDIR)testbn.exe
+!end
+!begin clangcl
+cleantestprogs:
+	-rm -f $(BUILDDIR)testbn.exe
 !end
