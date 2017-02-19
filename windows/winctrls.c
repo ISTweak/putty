@@ -303,6 +303,7 @@ void bareradioline(struct ctlpos *cp, int nacross, ...)
 	if (!btext)
 	    break;
 	(void) va_arg(ap, int); /* id */
+        nbuttons++;
     }
     va_end(ap);
     buttons = snewn(nbuttons, struct radio);
@@ -333,6 +334,7 @@ void radiobig(struct ctlpos *cp, char *text, int id, ...)
 	if (!btext)
 	    break;
 	(void) va_arg(ap, int); /* id */
+        nbuttons++;
     }
     va_end(ap);
     buttons = snewn(nbuttons, struct radio);
