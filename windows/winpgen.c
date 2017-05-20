@@ -328,7 +328,7 @@ static INT_PTR CALLBACK AboutProc(HWND hwnd, UINT msg,
 	  case 102:
 	    /* Load web browser */
 	    ShellExecute(hwnd, "open",
-			 "http://www.chiark.greenend.org.uk/~sgtatham/putty/",
+			 "https://www.chiark.greenend.org.uk/~sgtatham/putty/",
 			 0, 0, SW_SHOWDEFAULT);
 	    return 0;
 	}
@@ -1154,6 +1154,7 @@ static INT_PTR CALLBACK MainDlgProc(HWND hwnd, UINT msg,
 		    if (ret != IDOK)
 			break;
                 }
+
 		ui_set_state(hwnd, state, 1);
 		l10nSetDlgItemText(hwnd, IDC_GENERATING, entropy_msg);
 		state->key_exists = FALSE;

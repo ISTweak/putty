@@ -290,7 +290,7 @@ GLOBAL void *logctx;
 /*
  * Exports from winnet.c.
  */
-extern int select_result(WPARAM, LPARAM);
+extern void select_result(WPARAM, LPARAM);
 
 /*
  * winnet.c dynamically loads WinSock 2 or WinSock 1 depending on
