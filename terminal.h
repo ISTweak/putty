@@ -39,7 +39,8 @@ struct termchar {
      * saying FULL-TERMCHAR.
      */
     unsigned long chr;
-    unsigned long long attr;
+    unsigned long attr;
+    truecolour truecolour;
 
     /*
      * The cc_next field is used to link multiple termchars
@@ -102,6 +103,7 @@ struct terminal_tag {
 #endif /* OPTIMISE_SCROLL */
 
     int default_attr, curr_attr, save_attr;
+    truecolour curr_truecolour;
     termchar basic_erase_char, erase_char;
 
     bufchain inbuf;		       /* terminal input buffer */
@@ -316,7 +318,7 @@ struct terminal_tag {
     int no_remote_charset;
     int no_remote_resize;
     int no_remote_wintitle;
-	int no_remote_clearscroll;
+    int no_remote_clearscroll;
     int rawcnp;
     int rect_select;
     int remote_qtitle_action;

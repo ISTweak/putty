@@ -108,6 +108,7 @@ static void update_sbar(Terminal *);
 static void deselect(Terminal *);
 static void term_print_finish(Terminal *);
 static void scroll(Terminal *, int, int, int, int);
+static void parse_optionalrgb(optionalrgb *out, unsigned *values);
 #ifdef OPTIMISE_SCROLL
 static void scroll_display(Terminal *, int, int, int);
 #endif /* OPTIMISE_SCROLL */
@@ -415,9 +416,11 @@ static void clear_cc(termline *line, int col)
  * fields to be.
  */
 static int termchars_equal_override(termchar *a, termchar *b,
-				    unsigned long bchr, unsigned long long battr)
+				    unsigned long bchr, unsigned long battr)
 {
     /* FULL-TERMCHAR */
+    if (!truecolour_equal(a->truecolour, b->truecolour))
+	return FALSE;
     if (a->chr != bchr)
 	return FALSE;
     if ((a->attr &~ DATTR_MASK) != (battr &~ DATTR_MASK))
@@ -715,7 +718,7 @@ static void makeliteral_attr(struct buf *b, termchar *c, unsigned long *state)
      * ensures that attribute values remain 16-bit _unless_ the
      * user uses extended colour.
      */
-    unsigned long long attr, colourbits;
+    unsigned attr, colourbits;
 
     attr = c->attr;
 
@@ -740,6 +743,24 @@ static void makeliteral_attr(struct buf *b, termchar *c, unsigned long *state)
 	add(b, (unsigned char)((attr >> 16) & 0xFF));
 	add(b, (unsigned char)((attr >> 8) & 0xFF));
 	add(b, (unsigned char)(attr & 0xFF));
+    }
+}
+static void makeliteral_truecolour(struct buf *b, termchar *c, unsigned long *state)
+{
+    /*
+     * Put the used parts of the colour info into the buffer.
+     */
+    add(b, ((c->truecolour.fg.enabled ? 1 : 0) |
+            (c->truecolour.bg.enabled ? 2 : 0)));
+    if (c->truecolour.fg.enabled) {
+	add(b, c->truecolour.fg.r);
+	add(b, c->truecolour.fg.g);
+	add(b, c->truecolour.fg.b);
+    }
+    if (c->truecolour.bg.enabled) {
+	add(b, c->truecolour.bg.r);
+	add(b, c->truecolour.bg.g);
+	add(b, c->truecolour.bg.b);
     }
 }
 static void makeliteral_cc(struct buf *b, termchar *c, unsigned long *state)
@@ -816,6 +837,7 @@ static unsigned char *compressline(termline *ldata)
      */
     makerle(b, ldata, makeliteral_chr);
     makerle(b, ldata, makeliteral_attr);
+    makerle(b, ldata, makeliteral_truecolour);
     makerle(b, ldata, makeliteral_cc);
 
     /*
@@ -936,7 +958,7 @@ static void readliteral_chr(struct buf *b, termchar *c, termline *ldata,
 static void readliteral_attr(struct buf *b, termchar *c, termline *ldata,
 			     unsigned long *state)
 {
-    unsigned long long val, attr, colourbits;
+    unsigned val, attr, colourbits;
 
     val = get(b) << 8;
     val |= get(b);
@@ -960,6 +982,29 @@ static void readliteral_attr(struct buf *b, termchar *c, termline *ldata,
     attr |= (colourbits & 0xF) << (ATTR_FGSHIFT + 4);
 
     c->attr = attr;
+}
+static void readliteral_truecolour(struct buf *b, termchar *c, termline *ldata,
+				   unsigned long *state)
+{
+    int flags = get(b);
+
+    if (flags & 1) {
+        c->truecolour.fg.enabled = TRUE;
+	c->truecolour.fg.r = get(b);
+	c->truecolour.fg.g = get(b);
+	c->truecolour.fg.b = get(b);
+    } else {
+	c->truecolour.fg = optionalrgb_none;
+    }
+
+    if (flags & 2) {
+        c->truecolour.bg.enabled = TRUE;
+	c->truecolour.bg.r = get(b);
+	c->truecolour.bg.g = get(b);
+	c->truecolour.bg.b = get(b);
+    } else {
+	c->truecolour.bg = optionalrgb_none;
+    }
 }
 static void readliteral_cc(struct buf *b, termchar *c, termline *ldata,
 			   unsigned long *state)
@@ -1034,6 +1079,7 @@ static termline *decompressline(unsigned char *data, int *bytes_used)
      */
     readrle(b, ldata, readliteral_chr);
     readrle(b, ldata, readliteral_attr);
+    readrle(b, ldata, readliteral_truecolour);
     readrle(b, ldata, readliteral_cc);
 
     /* Return the number of bytes read, for diagnostic purposes. */
@@ -1388,6 +1434,7 @@ static void power_on(Terminal *term, int clear)
     term->big_cursor = 0;
     term->default_attr = term->save_attr =
 	term->alt_save_attr = term->curr_attr = ATTR_DEFAULT;
+    term->curr_truecolour.fg = term->curr_truecolour.bg = optionalrgb_none;
     term->term_editing = term->term_echoing = FALSE;
     term->app_cursor_keys = conf_get_int(term->conf, CONF_app_cursor);
     term->app_keypad_keys = conf_get_int(term->conf, CONF_app_keypad);
@@ -1542,7 +1589,7 @@ void term_copy_stuff_from_conf(Terminal *term)
     term->no_remote_charset = conf_get_int(term->conf, CONF_no_remote_charset);
     term->no_remote_resize = conf_get_int(term->conf, CONF_no_remote_resize);
     term->no_remote_wintitle = conf_get_int(term->conf, CONF_no_remote_wintitle);
-	term->no_remote_clearscroll = conf_get_int(term->conf, CONF_no_remote_clearscroll);
+    term->no_remote_clearscroll = conf_get_int(term->conf, CONF_no_remote_clearscroll);
     term->rawcnp = conf_get_int(term->conf, CONF_rawcnp);
     term->rect_select = conf_get_int(term->conf, CONF_rect_select);
     term->remote_qtitle_action = conf_get_int(term->conf, CONF_remote_qtitle_action);
@@ -1718,6 +1765,8 @@ void term_clrsb(Terminal *term)
     update_sbar(term);
 }
 
+const optionalrgb optionalrgb_none = {0, 0, 0, 0};
+
 /*
  * Initialise the terminal.
  */
@@ -1794,6 +1843,8 @@ Terminal *term_init(Conf *myconf, struct unicode_data *ucsdata,
     term->basic_erase_char.chr = CSET_ASCII | ' ';
     term->basic_erase_char.attr = ATTR_DEFAULT;
     term->basic_erase_char.cc_next = 0;
+    term->basic_erase_char.truecolour.fg = optionalrgb_none;
+    term->basic_erase_char.truecolour.bg = optionalrgb_none;
     term->erase_char = term->basic_erase_char;
 
     return term;
@@ -3563,6 +3614,8 @@ static void term_out(Terminal *term)
 			clear_cc(cline, term->curs.x);
 			cline->chars[term->curs.x].chr = c;
 			cline->chars[term->curs.x].attr = term->curr_attr;
+			cline->chars[term->curs.x].truecolour =
+                            term->curr_truecolour;
 
 			term->curs.x++;
 
@@ -3570,6 +3623,8 @@ static void term_out(Terminal *term)
 			clear_cc(cline, term->curs.x);
 			cline->chars[term->curs.x].chr = UCSWIDE;
 			cline->chars[term->curs.x].attr = term->curr_attr;
+			cline->chars[term->curs.x].truecolour =
+                            term->curr_truecolour;
 
 			break;
 		      case 1:
@@ -3580,6 +3635,8 @@ static void term_out(Terminal *term)
 			clear_cc(cline, term->curs.x);
 			cline->chars[term->curs.x].chr = c;
 			cline->chars[term->curs.x].attr = term->curr_attr;
+			cline->chars[term->curs.x].truecolour =
+                            term->curr_truecolour;
 
 			break;
 		      case 0:
@@ -3706,7 +3763,7 @@ static void term_out(Terminal *term)
 		    break;
 		  case 'Z':	       /* DECID: terminal type query */
 		    compatibility(VT100);
-		    if (term->ldisc)
+		    if (term->ldisc && term->id_string[0])
 			ldisc_send(term->ldisc, term->id_string,
 				   strlen(term->id_string), 0);
 		    break;
@@ -3958,8 +4015,8 @@ static void term_out(Terminal *term)
 			    if (i == 3) {
 				/* Erase Saved Lines (xterm)
 				 * This follows Thomas Dickey's xterm. */
-				if (!term->no_remote_clearscroll)
-					term_clrsb(term);
+                                if (!term->no_remote_clearscroll)
+                                    term_clrsb(term);
 			    } else {
 				i++;
 				if (i > 3)
@@ -4013,7 +4070,7 @@ static void term_out(Terminal *term)
 		      case 'c':       /* DA: terminal type query */
 			compatibility(VT100);
 			/* This is the response for a VT102 */
-			if (term->ldisc)
+			if (term->ldisc && term->id_string[0])
 			    ldisc_send(term->ldisc, term->id_string,
  				       strlen(term->id_string), 0);
 			break;
@@ -4150,6 +4207,8 @@ static void term_out(Terminal *term)
 				switch (def(term->esc_args[i], 0)) {
 				  case 0:	/* restore defaults */
 				    term->curr_attr = term->default_attr;
+				    term->curr_truecolour =
+                                        term->basic_erase_char.truecolour;
 				    break;
 				  case 1:	/* enable bold */
 				    compatibility(VT100AVO);
@@ -4211,6 +4270,7 @@ static void term_out(Terminal *term)
 				  case 36:
 				  case 37:
 				    /* foreground */
+				    term->curr_truecolour.fg.enabled = FALSE;
 				    term->curr_attr &= ~ATTR_FGMASK;
 				    term->curr_attr |=
 					(term->esc_args[i] - 30)<<ATTR_FGSHIFT;
@@ -4224,12 +4284,14 @@ static void term_out(Terminal *term)
 				  case 96:
 				  case 97:
 				    /* aixterm-style bright foreground */
+				    term->curr_truecolour.fg.enabled = FALSE;
 				    term->curr_attr &= ~ATTR_FGMASK;
 				    term->curr_attr |=
 					((term->esc_args[i] - 90 + 8)
                                          << ATTR_FGSHIFT);
 				    break;
 				  case 39:	/* default-foreground */
+				    term->curr_truecolour.fg.enabled = FALSE;
 				    term->curr_attr &= ~ATTR_FGMASK;
 				    term->curr_attr |= ATTR_DEFFG;
 				    break;
@@ -4242,6 +4304,7 @@ static void term_out(Terminal *term)
 				  case 46:
 				  case 47:
 				    /* background */
+				    term->curr_truecolour.bg.enabled = FALSE;
 				    term->curr_attr &= ~ATTR_BGMASK;
 				    term->curr_attr |=
 					(term->esc_args[i] - 40)<<ATTR_BGSHIFT;
@@ -4255,16 +4318,32 @@ static void term_out(Terminal *term)
 				  case 106:
 				  case 107:
 				    /* aixterm-style bright background */
+				    term->curr_truecolour.bg.enabled = FALSE;
 				    term->curr_attr &= ~ATTR_BGMASK;
 				    term->curr_attr |=
 					((term->esc_args[i] - 100 + 8)
                                          << ATTR_BGSHIFT);
 				    break;
 				  case 49:	/* default-background */
+				    term->curr_truecolour.bg.enabled = FALSE;
 				    term->curr_attr &= ~ATTR_BGMASK;
 				    term->curr_attr |= ATTR_DEFBG;
 				    break;
-				  case 38:   /* xterm 256-colour mode */
+
+                                    /*
+                                     * 256-colour and true-colour
+                                     * sequences. A 256-colour
+                                     * foreground is selected by a
+                                     * sequence of 3 arguments in the
+                                     * form 38;5;n, where n is in the
+                                     * range 0-255. A true-colour RGB
+                                     * triple is selected by 5 args of
+                                     * the form 38;2;r;g;b. Replacing
+                                     * the initial 38 with 48 in both
+                                     * cases selects the same colour
+                                     * as the background.
+                                     */
+				  case 38:
 				    if (i+2 < term->esc_nargs &&
 					term->esc_args[i+1] == 5) {
 					term->curr_attr &= ~ATTR_FGMASK;
@@ -4272,9 +4351,16 @@ static void term_out(Terminal *term)
 					    ((term->esc_args[i+2] & 0xFF)
 					     << ATTR_FGSHIFT);
 					i += 2;
+					}
+				    if (i + 4 < term->esc_nargs &&
+					term->esc_args[i + 1] == 2) {
+					parse_optionalrgb(
+                                            &term->curr_truecolour.fg,
+                                            term->esc_args + (i+2));
+					i += 4;
 				    }
 				    break;
-				  case 48:   /* xterm 256-colour mode */
+				  case 48:
 				    if (i+2 < term->esc_nargs &&
 					term->esc_args[i+1] == 5) {
 					term->curr_attr &= ~ATTR_BGMASK;
@@ -4282,6 +4368,13 @@ static void term_out(Terminal *term)
 					    ((term->esc_args[i+2] & 0xFF)
 					     << ATTR_BGSHIFT);
 					i += 2;
+				    }
+				    if (i + 4 < term->esc_nargs &&
+					term->esc_args[i+1] == 2) {
+					parse_optionalrgb(
+                                            &term->curr_truecolour.bg,
+                                            term->esc_args + (i+2));
+					i += 4;
 				    }
 				    break;
 				}
@@ -4420,7 +4513,8 @@ static void term_out(Terminal *term)
 					p = EMPTY_WINDOW_TITLE;
 				    len = strlen(p);
 				    ldisc_send(term->ldisc, "\033]L", 3, 0);
-				    ldisc_send(term->ldisc, p, len, 0);
+                                    if (len > 0)
+                                        ldisc_send(term->ldisc, p, len, 0);
 				    ldisc_send(term->ldisc, "\033\\", 2, 0);
 				}
 				break;
@@ -4433,7 +4527,8 @@ static void term_out(Terminal *term)
 					p = EMPTY_WINDOW_TITLE;
 				    len = strlen(p);
 				    ldisc_send(term->ldisc, "\033]l", 3, 0);
-				    ldisc_send(term->ldisc, p, len, 0);
+                                    if (len > 0)
+                                        ldisc_send(term->ldisc, p, len, 0);
 				    ldisc_send(term->ldisc, "\033\\", 2, 0);
 				}
 				break;
@@ -5083,6 +5178,19 @@ static void term_out(Terminal *term)
 }
 
 /*
+ * Small subroutine to parse three consecutive escape-sequence
+ * arguments representing a true-colour RGB triple into an
+ * optionalrgb.
+ */
+static void parse_optionalrgb(optionalrgb *out, unsigned *values)
+{
+    out->enabled = TRUE;
+    out->r = values[0] < 256 ? values[0] : 0;
+    out->g = values[1] < 256 ? values[1] : 0;
+    out->b = values[2] < 256 ? values[2] : 0;
+}
+
+/*
  * To prevent having to run the reasonably tricky bidi algorithm
  * too many times, we maintain a cache of the last lineful of data
  * fed to the algorithm on each line of the display.
@@ -5502,13 +5610,13 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
 	termline *ldata;
 	termchar *lchars;
 	int dirty_line, dirty_run, selected;
-	unsigned long long attr = 0;
-	unsigned long cset = 0;
+	unsigned long attr = 0, cset = 0;
 	int start = 0;
 	int ccount = 0;
 	int last_run_dirty = 0;
 	int laststart, dirtyrect;
 	int *backward;
+        truecolour tc;
 
 	scrpos.y = i + term->disptop;
 	ldata = lineptr(scrpos.y);
@@ -5527,8 +5635,7 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
 	 * each character cell to look like.
 	 */
 	for (j = 0; j < term->cols; j++) {
-	    unsigned long tchar;
-	    unsigned long long tattr;
+	    unsigned long tattr, tchar;
 	    termchar *d = lchars + j;
 	    scrpos.x = backward ? backward[j] : j;
 
@@ -5539,6 +5646,7 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
                 tattr = (tattr & ~(ATTR_FGMASK | ATTR_BGMASK)) | 
                 ATTR_DEFFG | ATTR_DEFBG;
 
+	    tc = d->truecolour;
 	    if (!term->xterm_256_colour) {
 		int colour;
 		colour = (tattr & ATTR_FGMASK) >> ATTR_FGSHIFT;
@@ -5606,6 +5714,7 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
 	    /* FULL-TERMCHAR */
 	    newline[j].attr = tattr;
 	    newline[j].chr = tchar;
+	    newline[j].truecolour = tc;
 	    /* Combining characters are still read from lchars */
 	    newline[j].cc_next = 0;
 	}
@@ -5660,9 +5769,9 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
 				  term->disptext[i]->lattr);
 	term->disptext[i]->lattr = ldata->lattr;
 
+	tc = term->erase_char.truecolour;
 	for (j = 0; j < term->cols; j++) {
-	    unsigned long tchar;
-	    unsigned long long tattr;
+	    unsigned long tattr, tchar;
 	    int break_run, do_copy;
 	    termchar *d = lchars + j;
 
@@ -5673,6 +5782,9 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
 		dirty_line = TRUE;
 
 	    break_run = ((tattr ^ attr) & term->attr_mask) != 0;
+
+            if (!truecolour_equal(newline[j].truecolour, tc))
+                break_run = TRUE;
 
 #ifdef USES_VTLINE_HACK
 	    /* Special hack for VT100 Linedraw glyphs */
@@ -5706,15 +5818,15 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
 
 	    if (break_run) {
 		if ((dirty_run || last_run_dirty) && ccount > 0) {
-		    do_text(ctx, start, i, ch, ccount, attr,
-			    ldata->lattr);
+		    do_text(ctx, start, i, ch, ccount, attr, ldata->lattr, tc);
 		    if (attr & (TATTR_ACTCURS | TATTR_PASCURS))
 			do_cursor(ctx, start, i, ch, ccount, attr,
-				  ldata->lattr);
+                                  ldata->lattr, tc);
 		}
 		start = j;
 		ccount = 0;
 		attr = tattr;
+		tc = newline[j].truecolour;
 		cset = CSET_OF(tchar);
 		if (term->ucsdata->dbcs_screenfont)
 		    last_run_dirty = dirty_run;
@@ -5783,6 +5895,7 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
 		copy_termchar(term->disptext[i], j, d);
 		term->disptext[i]->chars[j].chr = tchar;
 		term->disptext[i]->chars[j].attr = tattr;
+		term->disptext[i]->chars[j].truecolour = tc;
 		if (start == j)
 		    term->disptext[i]->chars[j].attr |= DATTR_STARTRUN;
 	    }
@@ -5804,11 +5917,9 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
 	    }
 	}
 	if (dirty_run && ccount > 0) {
-	    do_text(ctx, start, i, ch, ccount, attr,
-		    ldata->lattr);
+	    do_text(ctx, start, i, ch, ccount, attr, ldata->lattr, tc);
 	    if (attr & (TATTR_ACTCURS | TATTR_PASCURS))
-		do_cursor(ctx, start, i, ch, ccount, attr,
-			  ldata->lattr);
+		do_cursor(ctx, start, i, ch, ccount, attr, ldata->lattr, tc);
 	}
 
 	unlineptr(ldata);
@@ -5944,7 +6055,7 @@ static void clipme(Terminal *term, pos top, pos bottom, int rect, int desel)
 {
     clip_workbuf buf;
     int old_top_x;
-    unsigned long long attr;
+    int attr;
 
     buf.buflen = 5120;			
     buf.bufpos = 0;
@@ -6014,7 +6125,7 @@ static void clipme(Terminal *term, pos top, pos bottom, int rect, int desel)
 
 	    while (1) {
 		int uc = ldata->chars[x].chr;
-		attr = ldata->chars[x].attr;
+                attr = ldata->chars[x].attr;
 
 		/* Ignore Chars */
 		if (ignore_uchar(uc)) {
@@ -6471,7 +6582,18 @@ void term_mouse(Terminal *term, Mouse_Button braw, Mouse_Button bcooked,
 	    term_scroll(term, 0, +1);
     }
     if (x < 0) {
-	if (y > 0) {
+	if (y > 0 && !raw_mouse && term->seltype != RECTANGULAR) {
+            /*
+             * When we're using the mouse for normal raster-based
+             * selection, dragging off the left edge of a terminal row
+             * is treated the same as the right-hand end of the
+             * previous row, in that it's considered to identify a
+             * point _before_ the first character on row y.
+             *
+             * But if the mouse action is going to be used for
+             * anything else - rectangular selection, or xterm mouse
+             * tracking - then we disable this special treatment.
+             */
 	    x = term->cols - 1;
 	    y--;
 	} else

@@ -63,7 +63,7 @@ typedef struct terminal_tag Terminal;
 
 #define DATTR_STARTRUN      0x80000000UL   /* start of redraw run */
 
-#define TDATTR_MASK         0xF0000000ULL
+#define TDATTR_MASK         0xF0000000UL
 #define TATTR_MASK (TDATTR_MASK)
 #define DATTR_MASK (TDATTR_MASK)
 
@@ -77,7 +77,7 @@ typedef struct terminal_tag Terminal;
 					  wrapped to next line, so last
 					  single-width cell is empty */
 
-#define ATTR_INVALID 0x03FFFFUL
+#define ATTR_INVALID 0x03FFFFU
 
 /* Like Linux use the F000 page for direct to font. */
 #define CSET_OEMCP   0x0000F000UL      /* OEM Codepage DTF */
@@ -695,11 +695,35 @@ void prompt_ensure_result_size(prompt_t *pr, int len);
 void free_prompts(prompts_t *p);
 
 /*
+ * Data type definitions for true-colour terminal display.
+ * 'optionalrgb' describes a single RGB colour, which overrides the
+ * other colour settings if 'enabled' is nonzero, and is ignored
+ * otherwise. 'truecolour' contains a pair of those for foreground and
+ * background.
+ */
+typedef struct optionalrgb {
+    unsigned char enabled;
+    unsigned char r, g, b;
+} optionalrgb;
+extern const optionalrgb optionalrgb_none;
+typedef struct truecolour {
+    optionalrgb fg, bg;
+} truecolour;
+#define optionalrgb_equal(r1,r2) (                              \
+        (r1).enabled==(r2).enabled &&                           \
+        (r1).r==(r2).r && (r1).g==(r2).g && (r1).b==(r2).b)
+#define truecolour_equal(c1,c2) (               \
+        optionalrgb_equal((c1).fg, (c2).fg) &&  \
+        optionalrgb_equal((c1).bg, (c2).bg))
+
+/*
  * Exports from the front end.
  */
 void request_resize(void *frontend, int, int);
-void do_text(Context, int, int, wchar_t *, int, unsigned long, int);
-void do_cursor(Context, int, int, wchar_t *, int, unsigned long, int);
+void do_text(Context, int, int, wchar_t *, int, unsigned long, int,
+             truecolour);
+void do_cursor(Context, int, int, wchar_t *, int, unsigned long, int,
+               truecolour);
 int char_width(Context ctx, int uc);
 #ifdef OPTIMISE_SCROLL
 void do_scroll(Context, int, int, int);
@@ -880,7 +904,7 @@ void cleanup_exit(int);
     X(INT, NONE, no_remote_resize) /* disable remote resizing */ \
     X(INT, NONE, no_alt_screen) /* disable alternate screen */ \
     X(INT, NONE, no_remote_wintitle) /* disable remote retitling */ \
-	X(INT, NONE, no_remote_clearscroll) /* disable ESC[3J */ \
+    X(INT, NONE, no_remote_clearscroll) /* disable ESC[3J */ \
     X(INT, NONE, no_dbackspace) /* disable destructive backspace */ \
     X(INT, NONE, no_remote_charset) /* disable remote charset config */ \
     X(INT, NONE, remote_qtitle_action) /* remote win title query action */ \
