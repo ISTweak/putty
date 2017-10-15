@@ -1437,7 +1437,7 @@ void setup_config_box(struct controlbox *b, int midsession,
 			      "ADB", 'a', I(PROT_ADB),
 			      NULL);
 	} else {
-	    ctrl_radiobuttons(s, "Connection type:", NO_SHORTCUT, 5,
+	    ctrl_radiobuttons(s, "Connection type:", NO_SHORTCUT, 4,
 			      HELPCTX(session_hostname),
 			      config_protocolbuttons_handler, P(hp),
 			      "Raw", 'w', I(PROT_RAW),
