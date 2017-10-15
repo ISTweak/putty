@@ -203,6 +203,9 @@ static int descent;
 #define NEXTCOLOURS 240
 #define NALLCOLOURS (NCFGCOLOURS + NEXTCOLOURS)
 static COLORREF colours[NALLCOLOURS];
+struct rgb {
+    int r, g, b;
+} colours_rgb[NALLCOLOURS];
 static HPALETTE pal;
 static LPLOGPALETTE logpal;
 static RGBTRIPLE defpal[NALLCOLOURS];
@@ -1436,6 +1439,19 @@ static void systopalette(void)
     }
 }
 
+static void internal_set_colour(int i, int r, int g, int b)
+{
+    assert(i >= 0);
+    assert(i < NALLCOLOURS);
+    if (pal)
+        colours[i] = PALETTERGB(r, g, b);
+    else
+        colours[i] = RGB(r, g, b);
+    colours_rgb[i].r = r;
+    colours_rgb[i].g = g;
+    colours_rgb[i].b = b;
+}
+
 /*
  * Set up the colour palette.
  */
@@ -1470,15 +1486,9 @@ static void init_palette(void)
 	}
 	ReleaseDC(hwnd, hdc);
     }
-    if (pal)
-	for (i = 0; i < NALLCOLOURS; i++)
-	    colours[i] = PALETTERGB(defpal[i].rgbtRed,
-				    defpal[i].rgbtGreen,
-				    defpal[i].rgbtBlue);
-    else
-	for (i = 0; i < NALLCOLOURS; i++)
-	    colours[i] = RGB(defpal[i].rgbtRed,
-			     defpal[i].rgbtGreen, defpal[i].rgbtBlue);
+    for (i = 0; i < NALLCOLOURS; i++)
+        internal_set_colour(i, defpal[i].rgbtRed,
+                            defpal[i].rgbtGreen, defpal[i].rgbtBlue);
 }
 
 /*
@@ -3885,7 +3895,8 @@ void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
     y += offset_height;
 
     if ((attr & TATTR_ACTCURS) && (cursor_type == 0 || term->big_cursor)) {
-	attr &= ~(ATTR_REVERSE|ATTR_BLINK|ATTR_COLOURS);
+        truecolour.fg = truecolour.bg = optionalrgb_none;
+	attr &= ~(ATTR_REVERSE|ATTR_BLINK|ATTR_COLOURS|ATTR_DIM);
 	/* cursor fg and bg */
 	if (ime_mode)
 	    attr |= (262 << ATTR_FGSHIFT) | (263 << ATTR_BGSHIFT);
@@ -3969,9 +3980,15 @@ void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
     if (!fonts[nfont])
 	nfont = FONT_NORMAL;
     if (attr & ATTR_REVERSE) {
+        struct optionalrgb trgb;
+
 	t = nfg;
 	nfg = nbg;
 	nbg = t;
+
+        trgb = truecolour.fg;
+        truecolour.fg = truecolour.bg;
+        truecolour.bg = trgb;
     }
     if (bold_colours && (attr & ATTR_BOLD) && !is_cursor) {
 	if (nfg < 16) nfg |= 8;
@@ -3981,15 +3998,21 @@ void do_text_internal(Context ctx, int x, int y, wchar_t *text, int len,
 	if (nbg < 16) nbg |= 8;
 	else if (nbg >= 256) nbg |= 1;
     }
-    if (truecolour.fg.enabled)
+    if (!pal && truecolour.fg.enabled)
 	fg = RGB(truecolour.fg.r, truecolour.fg.g, truecolour.fg.b);
     else
 	fg = colours[nfg];
 
-    if (truecolour.bg.enabled)
+    if (!pal && truecolour.bg.enabled)
 	bg = RGB(truecolour.bg.r, truecolour.bg.g, truecolour.bg.b);
     else
 	bg = colours[nbg];
+
+    if (!pal && (attr & ATTR_DIM)) {
+        fg = RGB(GetRValue(fg) * 2 / 3,
+                 GetGValue(fg) * 2 / 3,
+                 GetBValue(fg) * 2 / 3);
+    }
 
     SelectObject(hdc, fonts[nfont]);
     SetTextColor(hdc, fg);
@@ -5344,15 +5367,24 @@ void free_ctx(Context ctx)
 
 static void real_palette_set(int n, int r, int g, int b)
 {
+    internal_set_colour(n, r, g, b);
     if (pal) {
 	logpal->palPalEntry[n].peRed = r;
 	logpal->palPalEntry[n].peGreen = g;
 	logpal->palPalEntry[n].peBlue = b;
 	logpal->palPalEntry[n].peFlags = PC_NOCOLLAPSE;
-	colours[n] = PALETTERGB(r, g, b);
 	SetPaletteEntries(pal, 0, NALLCOLOURS, logpal->palPalEntry);
-    } else
-	colours[n] = RGB(r, g, b);
+    }
+}
+
+int palette_get(void *frontend, int n, int *r, int *g, int *b)
+{
+    if (n < 0 || n >= NALLCOLOURS)
+	return FALSE;
+    *r = colours_rgb[n].r;
+    *g = colours_rgb[n].g;
+    *b = colours_rgb[n].b;
+    return TRUE;
 }
 
 void palette_set(void *frontend, int n, int r, int g, int b)
@@ -5382,17 +5414,14 @@ void palette_reset(void *frontend)
 
     /* And this */
     for (i = 0; i < NALLCOLOURS; i++) {
+        internal_set_colour(i, defpal[i].rgbtRed,
+                            defpal[i].rgbtGreen, defpal[i].rgbtBlue);
 	if (pal) {
 	    logpal->palPalEntry[i].peRed = defpal[i].rgbtRed;
 	    logpal->palPalEntry[i].peGreen = defpal[i].rgbtGreen;
 	    logpal->palPalEntry[i].peBlue = defpal[i].rgbtBlue;
 	    logpal->palPalEntry[i].peFlags = 0;
-	    colours[i] = PALETTERGB(defpal[i].rgbtRed,
-				    defpal[i].rgbtGreen,
-				    defpal[i].rgbtBlue);
-	} else
-	    colours[i] = RGB(defpal[i].rgbtRed,
-			     defpal[i].rgbtGreen, defpal[i].rgbtBlue);
+	}
     }
 
     if (pal) {

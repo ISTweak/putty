@@ -1437,7 +1437,7 @@ void setup_config_box(struct controlbox *b, int midsession,
 			      "ADB", 'a', I(PROT_ADB),
 			      NULL);
 	} else {
-	    ctrl_radiobuttons(s, "Connection type:", NO_SHORTCUT, 3,
+	    ctrl_radiobuttons(s, "Connection type:", NO_SHORTCUT, 5,
 			      HELPCTX(session_hostname),
 			      config_protocolbuttons_handler, P(hp),
 			      "Raw", 'w', I(PROT_RAW),
@@ -1712,7 +1712,7 @@ void setup_config_box(struct controlbox *b, int midsession,
 		  HELPCTX(features_retitle),
 		  conf_checkbox_handler,
 		  I(CONF_no_remote_wintitle));
-	ctrl_checkbox(s, "Disable remote-controlled clearing of scrollback", 'e',
+    ctrl_checkbox(s, "Disable remote-controlled clearing of scrollback", 'e',
 		  HELPCTX(features_clearscroll),
 		  conf_checkbox_handler,
 		  I(CONF_no_remote_clearscroll));
@@ -1936,6 +1936,9 @@ void setup_config_box(struct controlbox *b, int midsession,
     ctrl_checkbox(s, "Allow terminal to use xterm 256-colour mode", '2',
 		  HELPCTX(colours_xterm256), conf_checkbox_handler,
 		  I(CONF_xterm_256_colour));
+    ctrl_checkbox(s, "Allow terminal to use 24-bit colours", '4',
+		  HELPCTX(colours_truecolour), conf_checkbox_handler,
+		  I(CONF_true_colour));
     ctrl_radiobuttons(s, "Indicate bolded text by changing:", 'b', 3,
                       HELPCTX(colours_bold),
                       conf_radiobutton_handler, I(CONF_bold_style),

@@ -1435,6 +1435,7 @@ static void power_on(Terminal *term, int clear)
     term->default_attr = term->save_attr =
 	term->alt_save_attr = term->curr_attr = ATTR_DEFAULT;
     term->curr_truecolour.fg = term->curr_truecolour.bg = optionalrgb_none;
+    term->save_truecolour = term->alt_save_truecolour = term->curr_truecolour;
     term->term_editing = term->term_echoing = FALSE;
     term->app_cursor_keys = conf_get_int(term->conf, CONF_app_cursor);
     term->app_keypad_keys = conf_get_int(term->conf, CONF_app_keypad);
@@ -1546,9 +1547,11 @@ void term_pwron(Terminal *term, int clear)
 static void set_erase_char(Terminal *term)
 {
     term->erase_char = term->basic_erase_char;
-    if (term->use_bce)
+    if (term->use_bce) {
 	term->erase_char.attr = (term->curr_attr &
 				 (ATTR_FGMASK | ATTR_BGMASK));
+        term->erase_char.truecolour.bg = term->curr_truecolour.bg;
+    }
 }
 
 /*
@@ -1597,6 +1600,7 @@ void term_copy_stuff_from_conf(Terminal *term)
     term->scroll_on_disp = conf_get_int(term->conf, CONF_scroll_on_disp);
     term->scroll_on_key = conf_get_int(term->conf, CONF_scroll_on_key);
     term->xterm_256_colour = conf_get_int(term->conf, CONF_xterm_256_colour);
+    term->true_colour = conf_get_int(term->conf, CONF_true_colour);
 
     /*
      * Parse the control-character escapes in the configured
@@ -2132,6 +2136,7 @@ static void swap_screen(Terminal *term, int which, int reset, int keep_cur_pos)
 {
     int t;
     pos tp;
+    truecolour ttc;
     tree234 *ttr;
 
     if (!which)
@@ -2196,6 +2201,10 @@ static void swap_screen(Terminal *term, int which, int reset, int keep_cur_pos)
         if (!reset && !keep_cur_pos)
             term->save_attr = term->alt_save_attr;
         term->alt_save_attr = t;
+        ttc = term->save_truecolour;
+        if (!reset && !keep_cur_pos)
+            term->save_truecolour = term->alt_save_truecolour;
+        term->alt_save_truecolour = ttc;
         t = term->save_utf;
         if (!reset && !keep_cur_pos)
             term->save_utf = term->alt_save_utf;
@@ -2491,6 +2500,7 @@ static void save_cursor(Terminal *term, int save)
     if (save) {
 	term->savecurs = term->curs;
 	term->save_attr = term->curr_attr;
+	term->save_truecolour = term->curr_truecolour;
 	term->save_cset = term->cset;
 	term->save_utf = term->utf;
 	term->save_wnext = term->wrapnext;
@@ -2505,6 +2515,7 @@ static void save_cursor(Terminal *term, int save)
 	    term->curs.y = term->rows - 1;
 
 	term->curr_attr = term->save_attr;
+	term->curr_truecolour = term->save_truecolour;
 	term->cset = term->save_cset;
 	term->utf = term->save_utf;
 	term->wrapnext = term->save_wnext;
@@ -2996,7 +3007,22 @@ static void do_osc(Terminal *term)
 	    if (!term->no_remote_wintitle)
 		set_title(term->frontend, term->osc_string);
 	    break;
-	  case 4:
+          case 4:
+            if (term->ldisc && !strcmp(term->osc_string, "?")) {
+                int r, g, b;
+                if (palette_get(term->frontend, toint(term->esc_args[1]),
+                                &r, &g, &b)) {
+                    char *reply_buf = dupprintf(
+                        "\033]4;%u;rgb:%04x/%04x/%04x\007",
+                        term->esc_args[1],
+                        (unsigned)r * 0x0101,
+                        (unsigned)g * 0x0101,
+                        (unsigned)b * 0x0101);
+                    ldisc_send(term->ldisc, reply_buf, strlen(reply_buf), 0);
+                    sfree(reply_buf);
+                }
+            }
+            break;
 	  case 10:
 	  case 11:
 	  case 12:
@@ -3715,6 +3741,7 @@ static void term_out(Terminal *term)
 		    compatibility(OTHER);
 		    term->termstate = SEEN_OSC;
 		    term->esc_args[0] = 0;
+                    term->esc_nargs = 1;
 		    break;
 		  case '7':		/* DECSC: save cursor */
 		    compatibility(VT100);
@@ -4214,6 +4241,10 @@ static void term_out(Terminal *term)
 				    compatibility(VT100AVO);
 				    term->curr_attr |= ATTR_BOLD;
 				    break;
+				  case 2:	/* enable dim */
+				    compatibility(OTHER);
+				    term->curr_attr |= ATTR_DIM;
+				    break;
 				  case 21:	/* (enable double underline) */
 				    compatibility(OTHER);
 				  case 4:	/* enable underline */
@@ -4245,9 +4276,9 @@ static void term_out(Terminal *term)
 				    compatibility(SCOANSI);
 				    if (term->no_remote_charset) break;
 				    term->sco_acs = 2; break;
-				  case 22:	/* disable bold */
+				  case 22:	/* disable bold and dim */
 				    compatibility2(OTHER, VT220);
-				    term->curr_attr &= ~ATTR_BOLD;
+				    term->curr_attr &= ~(ATTR_BOLD | ATTR_DIM);
 				    break;
 				  case 24:	/* disable underline */
 				    compatibility2(OTHER, VT220);
@@ -4350,6 +4381,8 @@ static void term_out(Terminal *term)
 					term->curr_attr |=
 					    ((term->esc_args[i+2] & 0xFF)
 					     << ATTR_FGSHIFT);
+                                        term->curr_truecolour.fg =
+                                            optionalrgb_none;
 					i += 2;
 					}
 				    if (i + 4 < term->esc_nargs &&
@@ -4367,6 +4400,8 @@ static void term_out(Terminal *term)
 					term->curr_attr |=
 					    ((term->esc_args[i+2] & 0xFF)
 					     << ATTR_BGSHIFT);
+                                        term->curr_truecolour.bg =
+                                            optionalrgb_none;
 					i += 2;
 				    }
 				    if (i + 4 < term->esc_nargs &&
@@ -4689,6 +4724,7 @@ static void term_out(Terminal *term)
 				ATTR_FGSHIFT;
 			    term->curr_attr &= ~ATTR_FGMASK;
 			    term->curr_attr |= colour;
+                            term->curr_truecolour.fg = optionalrgb_none;
 			    term->default_attr &= ~ATTR_FGMASK;
 			    term->default_attr |= colour;
 			    set_erase_char(term);
@@ -4703,6 +4739,7 @@ static void term_out(Terminal *term)
 				ATTR_BGSHIFT;
 			    term->curr_attr &= ~ATTR_BGMASK;
 			    term->curr_attr |= colour;
+                            term->curr_truecolour.bg = optionalrgb_none;
 			    term->default_attr &= ~ATTR_BGMASK;
 			    term->default_attr |= colour;
 			    set_erase_char(term);
@@ -4820,25 +4857,40 @@ static void term_out(Terminal *term)
 		  case '7':
 		  case '8':
 		  case '9':
-		    if (term->esc_args[0] <= UINT_MAX / 10 &&
-			term->esc_args[0] * 10 <= UINT_MAX - c - '0')
-			term->esc_args[0] = 10 * term->esc_args[0] + c - '0';
+		    if (term->esc_args[term->esc_nargs-1] <= UINT_MAX / 10 &&
+			term->esc_args[term->esc_nargs-1] * 10 <= UINT_MAX - c - '0')
+			term->esc_args[term->esc_nargs-1] =
+                            10 * term->esc_args[term->esc_nargs-1] + c - '0';
 		    else
-			term->esc_args[0] = UINT_MAX;
+			term->esc_args[term->esc_nargs-1] = UINT_MAX;
 		    break;
-		  case 'L':
-		    /*
-		     * Grotty hack to support xterm and DECterm title
-		     * sequences concurrently.
-		     */
-		    if (term->esc_args[0] == 2) {
-			term->esc_args[0] = 1;
-			break;
-		    }
-		    /* else fall through */
-		  default:
-		    term->termstate = OSC_STRING;
-		    term->osc_strlen = 0;
+                  default:
+                    /*
+                     * _Most_ other characters here terminate the
+                     * immediate parsing of the OSC sequence and go
+                     * into OSC_STRING state, but we deal with a
+                     * couple of exceptions first.
+                     */
+                    if (c == 'L' && term->esc_args[0] == 2) {
+                        /*
+                         * Grotty hack to support xterm and DECterm title
+                         * sequences concurrently.
+                         */
+                        term->esc_args[0] = 1;
+                    } else if (c == ';' && term->esc_nargs == 1 &&
+                               term->esc_args[0] == 4) {
+                        /*
+                         * xterm's OSC 4 sequence to query the current
+                         * RGB value of a colour takes a second
+                         * numeric argument which is easiest to parse
+                         * using the existing system rather than in
+                         * do_osc.
+                         */
+                        term->esc_args[term->esc_nargs++] = 0;
+                    } else {
+                        term->termstate = OSC_STRING;
+                        term->osc_strlen = 0;
+                    }
 		}
 		break;
 	      case OSC_STRING:
@@ -5115,6 +5167,8 @@ static void term_out(Terminal *term)
 		    /* compatibility(OTHER) */
 		    term->vt52_bold = FALSE;
 		    term->curr_attr = ATTR_DEFAULT;
+                    term->curr_truecolour.fg = optionalrgb_none;
+                    term->curr_truecolour.bg = optionalrgb_none;
 		    set_erase_char(term);
 		    break;
 		  case 'S':
@@ -5646,7 +5700,6 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
                 tattr = (tattr & ~(ATTR_FGMASK | ATTR_BGMASK)) | 
                 ATTR_DEFFG | ATTR_DEFBG;
 
-	    tc = d->truecolour;
 	    if (!term->xterm_256_colour) {
 		int colour;
 		colour = (tattr & ATTR_FGMASK) >> ATTR_FGSHIFT;
@@ -5656,6 +5709,12 @@ static void do_paint(Terminal *term, Context ctx, int may_optimise)
 		if (colour >= 16 && colour < 256)
 		    tattr = (tattr &~ ATTR_BGMASK) | ATTR_DEFBG;
 	    }
+
+            if (term->true_colour) {
+                tc = d->truecolour;
+            } else {
+                tc.fg = tc.bg = optionalrgb_none;
+            }
 
 	    switch (tchar & CSET_MASK) {
 	      case CSET_ASCII:
