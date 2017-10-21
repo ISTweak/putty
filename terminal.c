@@ -197,7 +197,7 @@ static void osc_clip(Terminal *term)
 	    wbuff = snewn(wlen, wchar_t);
 	    wlen = mb_to_wc(term->ucsdata->line_codepage,
 			    0, buff, len, wbuff, wlen);
-	    write_clip(term->frontend, wbuff, NULL, wlen, 0);
+	    write_clip(term->frontend, wbuff, NULL, NULL, wlen, 0);
 
 	    sfree(wbuff);
 	    sfree(buff);
