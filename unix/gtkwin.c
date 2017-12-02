@@ -130,7 +130,7 @@ struct gui_data {
     Conf *conf;
     void *eventlogstuff;
     guint32 input_event_time; /* Timestamp of the most recent input event. */
-    int reconfiguring;
+    GtkWidget *dialogs[DIALOG_SLOT_LIMIT];
 #if GTK_CHECK_VERSION(3,4,0)
     gdouble cumulative_scroll;
 #endif
@@ -167,6 +167,38 @@ static int send_raw_mouse;
 
 static void start_backend(struct gui_data *inst);
 static void exit_callback(void *vinst);
+static void destroy_inst_connection(struct gui_data *inst);
+static void delete_inst(struct gui_data *inst);
+
+static void post_fatal_message_box_toplevel(void *vctx)
+{
+    struct gui_data *inst = (struct gui_data *)vctx;
+    gtk_widget_destroy(inst->window);
+}
+
+static void post_fatal_message_box(void *vctx, int result)
+{
+    struct gui_data *inst = (struct gui_data *)vctx;
+    unregister_dialog(inst, DIALOG_SLOT_CONNECTION_FATAL);
+    queue_toplevel_callback(post_fatal_message_box_toplevel, inst);
+}
+
+void fatal_message_box(struct gui_data *inst, const char *msg)
+{
+    char *title = dupcat(appname, " Fatal Error", NULL);
+    GtkWidget *dialog = create_message_box(
+        inst->window, title, msg,
+        string_width("REASONABLY LONG LINE OF TEXT FOR BASIC SANITY"),
+        FALSE, &buttons_ok, post_fatal_message_box, inst);
+    register_dialog(inst, DIALOG_SLOT_CONNECTION_FATAL, dialog);
+    sfree(title);
+}
+
+static void connection_fatal_callback(void *vinst)
+{
+    struct gui_data *inst = (struct gui_data *)vinst;
+    destroy_inst_connection(inst);
+}
 
 void connection_fatal(void *frontend, const char *p, ...)
 {
@@ -177,10 +209,11 @@ void connection_fatal(void *frontend, const char *p, ...)
     va_start(ap, p);
     msg = dupvprintf(p, ap);
     va_end(ap);
-    fatal_message_box(inst->window, msg);
+    fatal_message_box(inst, msg);
     sfree(msg);
 
-    queue_toplevel_callback(exit_callback, inst);
+    inst->exited = TRUE;   /* suppress normal exit handling */
+    queue_toplevel_callback(connection_fatal_callback, frontend);
 }
 
 /*
@@ -301,10 +334,30 @@ static Mouse_Button translate_button(Mouse_Button button)
  * Return the top-level GtkWindow associated with a particular
  * front end instance.
  */
-void *get_window(void *frontend)
+GtkWidget *get_window(void *frontend)
 {
     struct gui_data *inst = (struct gui_data *)frontend;
     return inst->window;
+}
+
+/*
+ * Set and clear a pointer to a dialog box created as a result of the
+ * network code wanting to ask an asynchronous user question (e.g.
+ * 'what about this dodgy host key, then?').
+ */
+void register_dialog(void *frontend, enum DialogSlot slot, GtkWidget *dialog)
+{
+    struct gui_data *inst = (struct gui_data *)frontend;
+    assert(slot < DIALOG_SLOT_LIMIT);
+    assert(!inst->dialogs[slot]);
+    inst->dialogs[slot] = dialog;
+}
+void unregister_dialog(void *frontend, enum DialogSlot slot)
+{
+    struct gui_data *inst = (struct gui_data *)frontend;
+    assert(slot < DIALOG_SLOT_LIMIT);
+    assert(inst->dialogs[slot]);
+    inst->dialogs[slot] = NULL;
 }
 
 /*
@@ -431,6 +484,25 @@ void get_window_pixels(void *frontend, int *x, int *y)
 }
 
 /*
+ * Find out whether a dialog box already exists for this window in a
+ * particular DialogSlot. If it does, uniconify it (if we can) and
+ * raise it, so that the user realises they've already been asked this
+ * question.
+ */
+static int find_and_raise_dialog(struct gui_data *inst, enum DialogSlot slot)
+{
+    GtkWidget *dialog = inst->dialogs[slot];
+    if (!dialog)
+        return FALSE;
+
+#if GTK_CHECK_VERSION(2,0,0)
+    gtk_window_deiconify(GTK_WINDOW(dialog));
+#endif
+    gdk_window_raise(gtk_widget_get_window(dialog));
+    return TRUE;
+}
+
+/*
  * Return the window or icon title.
  */
 char *get_window_title(void *frontend, int icon)
@@ -439,12 +511,44 @@ char *get_window_title(void *frontend, int icon)
     return icon ? inst->icontitle : inst->wintitle;
 }
 
+static void warn_on_close_callback(void *vctx, int result)
+{
+    struct gui_data *inst = (struct gui_data *)vctx;
+    unregister_dialog(inst, DIALOG_SLOT_WARN_ON_CLOSE);
+    if (result)
+        gtk_widget_destroy(inst->window);
+}
+
+/*
+ * Handle the 'delete window' event (e.g. user clicking the WM close
+ * button). The return value FALSE means the window should close, and
+ * TRUE means it shouldn't.
+ *
+ * (That's counterintuitive, but really, in GTK terms, TRUE means 'I
+ * have done everything necessary to handle this event, so the default
+ * handler need not do anything', i.e. 'suppress default handler',
+ * i.e. 'do not close the window'.)
+ */
 gint delete_window(GtkWidget *widget, GdkEvent *event, gpointer data)
 {
     struct gui_data *inst = (struct gui_data *)data;
     if (!inst->exited && conf_get_int(inst->conf, CONF_warn_on_close)) {
-	if (!reallyclose(inst))
-	    return TRUE;
+        /*
+         * We're not going to exit right now. We must put up a
+         * warn-on-close dialog, unless one already exists, in which
+         * case we'll just re-emphasise that one.
+         */
+        if (!find_and_raise_dialog(inst, DIALOG_SLOT_WARN_ON_CLOSE)) {
+            char *title = dupcat(appname, " Exit Confirmation", NULL);
+            GtkWidget *dialog = create_message_box(
+                inst->window, title,
+                "Are you sure you want to close this session?",
+                string_width("Most of the width of the above text"),
+                FALSE, &buttons_yn, warn_on_close_callback, inst);
+            register_dialog(inst, DIALOG_SLOT_WARN_ON_CLOSE, dialog);
+            sfree(title);
+        }
+        return TRUE;
     }
     return FALSE;
 }
@@ -1981,7 +2085,7 @@ void frontend_keypress(void *handle)
      * any keypress.
      */
     if (inst->exited)
-	cleanup_exit(0);
+        gtk_widget_destroy(inst->window);
 }
 
 static void exit_callback(void *vinst)
@@ -1991,21 +2095,13 @@ static void exit_callback(void *vinst)
 
     if (!inst->exited &&
         (exitcode = inst->back->exitcode(inst->backhandle)) >= 0) {
-	inst->exited = TRUE;
+        destroy_inst_connection(inst);
+
 	close_on_exit = conf_get_int(inst->conf, CONF_close_on_exit);
 	if (close_on_exit == FORCE_ON ||
-	    (close_on_exit == AUTO && exitcode == 0))
-	    gtk_main_quit();	       /* just go */
-	if (inst->ldisc) {
-	    ldisc_free(inst->ldisc);
-	    inst->ldisc = NULL;
-	}
-        inst->back->free(inst->backhandle);
-        inst->backhandle = NULL;
-        inst->back = NULL;
-        term_provide_resize_fn(inst->term, NULL, NULL);
-        update_specials_menu(inst);
-	gtk_widget_set_sensitive(inst->restartitem, TRUE);
+	    (close_on_exit == AUTO && exitcode == 0)) {
+            gtk_widget_destroy(inst->window);
+        }
     }
 }
 
@@ -2016,9 +2112,76 @@ void notify_remote_exit(void *frontend)
     queue_toplevel_callback(exit_callback, inst);
 }
 
+static void destroy_inst_connection(struct gui_data *inst)
+{
+    inst->exited = TRUE;
+    if (inst->ldisc) {
+        ldisc_free(inst->ldisc);
+        inst->ldisc = NULL;
+    }
+    if (inst->backhandle) {
+        inst->back->free(inst->backhandle);
+        inst->backhandle = NULL;
+        inst->back = NULL;
+    }
+    if (inst->term)
+        term_provide_resize_fn(inst->term, NULL, NULL);
+    if (inst->menu) {
+        update_specials_menu(inst);
+        gtk_widget_set_sensitive(inst->restartitem, TRUE);
+    }
+}
+
+static void delete_inst(struct gui_data *inst)
+{
+    int dialog_slot;
+    for (dialog_slot = 0; dialog_slot < DIALOG_SLOT_LIMIT; dialog_slot++) {
+        if (inst->dialogs[dialog_slot]) {
+            gtk_widget_destroy(inst->dialogs[dialog_slot]);
+            inst->dialogs[dialog_slot] = NULL;
+        }
+    }
+    if (inst->window) {
+        gtk_widget_destroy(inst->window);
+        inst->window = NULL;
+    }
+    if (inst->menu) {
+        gtk_widget_destroy(inst->menu);
+        inst->menu = NULL;
+    }
+    destroy_inst_connection(inst);
+    if (inst->term) {
+        term_free(inst->term);
+        inst->term = NULL;
+    }
+    if (inst->conf) {
+        conf_free(inst->conf);
+        inst->conf = NULL;
+    }
+    if (inst->logctx) {
+        log_free(inst->logctx);
+        inst->logctx = NULL;
+    }
+
+    /*
+     * Delete any top-level callbacks associated with inst, which
+     * would otherwise become stale-pointer dereferences waiting to
+     * happen. We do this last, because some of the above cleanups
+     * (notably shutting down the backend) might themelves queue such
+     * callbacks, so we need to make sure they don't do that _after_
+     * we're supposed to have cleaned everything up.
+     */
+    delete_callbacks_for_context(inst);
+
+    sfree(inst);
+}
+
 void destroy(GtkWidget *widget, gpointer data)
 {
-    gtk_main_quit();
+    struct gui_data *inst = (struct gui_data *)data;
+    inst->window = NULL;
+    delete_inst(inst);
+    session_window_closed();
 }
 
 gint focus_event(GtkWidget *widget, GdkEventFocus *event, gpointer data)
@@ -2884,13 +3047,13 @@ void set_sbar(void *frontend, int total, int start, int page)
     struct gui_data *inst = (struct gui_data *)frontend;
     if (!conf_get_int(inst->conf, CONF_scrollbar))
 	return;
+    inst->ignore_sbar = TRUE;
     gtk_adjustment_set_lower(inst->sbar_adjust, 0);
     gtk_adjustment_set_upper(inst->sbar_adjust, total);
     gtk_adjustment_set_value(inst->sbar_adjust, start);
     gtk_adjustment_set_page_size(inst->sbar_adjust, page);
     gtk_adjustment_set_step_increment(inst->sbar_adjust, 1);
     gtk_adjustment_set_page_increment(inst->sbar_adjust, page/2);
-    inst->ignore_sbar = TRUE;
 #if !GTK_CHECK_VERSION(3,18,0)
     gtk_adjustment_changed(inst->sbar_adjust);
 #endif
@@ -3039,11 +3202,16 @@ static void draw_set_colour(struct draw_ctx *dctx, int col, int dim)
 #ifdef DRAW_TEXT_GDK
     if (dctx->uctx.type == DRAWTYPE_GDK) {
         if (dim) {
+#if GTK_CHECK_VERSION(2,0,0)
             GdkColor color;
             color.red =   dctx->inst->cols[col].red   * 2 / 3;
             color.green = dctx->inst->cols[col].green * 2 / 3;
             color.blue =  dctx->inst->cols[col].blue  * 2 / 3;
             gdk_gc_set_rgb_fg_color(dctx->uctx.u.gdk.gc, &color);
+#else
+            /* Poor GTK1 fallback */
+            gdk_gc_set_foreground(dctx->uctx.u.gdk.gc, &dctx->inst->cols[col]);
+#endif
         } else {
             gdk_gc_set_foreground(dctx->uctx.u.gdk.gc, &dctx->inst->cols[col]);
         }
@@ -3064,6 +3232,7 @@ static void draw_set_colour_rgb(struct draw_ctx *dctx, optionalrgb orgb,
 {
 #ifdef DRAW_TEXT_GDK
     if (dctx->uctx.type == DRAWTYPE_GDK) {
+#if GTK_CHECK_VERSION(2,0,0)
 	GdkColor color;
 	color.red =   orgb.r * 256;
 	color.green = orgb.g * 256;
@@ -3074,6 +3243,10 @@ static void draw_set_colour_rgb(struct draw_ctx *dctx, optionalrgb orgb,
             color.blue  = color.blue  * 2 / 3;
         }
 	gdk_gc_set_rgb_fg_color(dctx->uctx.u.gdk.gc, &color);
+#else
+        /* Poor GTK1 fallback */
+        gdk_gc_set_foreground(dctx->uctx.u.gdk.gc, &dctx->inst->cols[256]);
+#endif
     }
 #endif
 #ifdef DRAW_TEXT_CAIRO
@@ -3616,17 +3789,6 @@ void modalfatalbox(const char *p, ...)
     exit(1);
 }
 
-void cmdline_error(const char *p, ...)
-{
-    va_list ap;
-    fprintf(stderr, "%s: ", appname);
-    va_start(ap, p);
-    vfprintf(stderr, p, ap);
-    va_end(ap);
-    fputc('\n', stderr);
-    exit(1);
-}
-
 const char *get_x_display(void *frontend)
 {
     return gdk_get_display();
@@ -3907,7 +4069,39 @@ void event_log_menuitem(GtkMenuItem *item, gpointer data)
     showeventlog(inst->eventlogstuff, inst->window);
 }
 
+struct after_change_settings_dialog_ctx {
+    struct gui_data *inst;
+    Conf *newconf;
+};
+
+static void after_change_settings_dialog(void *vctx, int retval);
+
 void change_settings_menuitem(GtkMenuItem *item, gpointer data)
+{
+    struct gui_data *inst = (struct gui_data *)data;
+    struct after_change_settings_dialog_ctx *ctx;
+    GtkWidget *dialog;
+    char *title;
+
+    if (find_and_raise_dialog(inst, DIALOG_SLOT_RECONFIGURE))
+        return;
+
+    title = dupcat(appname, " Reconfiguration", NULL);
+
+    ctx = snew(struct after_change_settings_dialog_ctx);
+    ctx->inst = inst;
+    ctx->newconf = conf_copy(inst->conf);
+
+    dialog = create_config_box(
+        title, ctx->newconf, 1,
+        inst->back ? inst->back->cfg_info(inst->backhandle) : 0,
+        after_change_settings_dialog, ctx);
+    register_dialog(inst, DIALOG_SLOT_RECONFIGURE, dialog);
+
+    sfree(title);
+}
+
+static void after_change_settings_dialog(void *vctx, int retval)
 {
     /* This maps colour indices in inst->conf to those used in inst->cols. */
     static const int ww[] = {
@@ -3915,25 +4109,26 @@ void change_settings_menuitem(GtkMenuItem *item, gpointer data)
 	0, 8, 1, 9, 2, 10, 3, 11,
 	4, 12, 5, 13, 6, 14, 7, 15
     };
-    struct gui_data *inst = (struct gui_data *)data;
-    char *title;
-    Conf *oldconf, *newconf;
+    struct after_change_settings_dialog_ctx ctx =
+        *(struct after_change_settings_dialog_ctx *)vctx;
+    struct gui_data *inst = ctx.inst;
+    Conf *oldconf = inst->conf, *newconf = ctx.newconf;
     int i, j, need_size;
+
+    sfree(vctx); /* we've copied this already */
+
+    if (retval < 0) {
+        /* If the dialog box was aborted without giving a result
+         * (probably because the whole session window closed), we have
+         * nothing further to do. */
+        return;
+    }
 
     assert(lenof(ww) == NCFGCOLOURS);
 
-    if (inst->reconfiguring)
-      return;
-    else
-      inst->reconfiguring = TRUE;
+    unregister_dialog(inst, DIALOG_SLOT_RECONFIGURE);
 
-    title = dupcat(appname, " Reconfiguration", NULL);
-
-    oldconf = inst->conf;
-    newconf = conf_copy(inst->conf);
-
-    if (do_config_box(title, newconf, 1,
-		      inst->back?inst->back->cfg_info(inst->backhandle):0)) {
+    if (retval) {
         inst->conf = newconf;
 
         /* Pass new config data to the logging module */
@@ -4038,10 +4233,10 @@ void change_settings_menuitem(GtkMenuItem *item, gpointer data)
                 char *msgboxtext =
                     dupprintf("Could not change fonts in terminal window: %s\n",
                               errmsg);
-                messagebox(inst->window, "Font setup error", msgboxtext,
-                           string_width("Could not change fonts in terminal window:"),
-                           FALSE, "OK", 'o', +1, 1,
-                           NULL);
+                create_message_box(
+                    inst->window, "Font setup error", msgboxtext,
+                    string_width("Could not change fonts in terminal window:"),
+                    FALSE, &buttons_ok, trivial_post_dialog_fn, NULL);
                 sfree(msgboxtext);
                 sfree(errmsg);
             } else {
@@ -4088,8 +4283,6 @@ void change_settings_menuitem(GtkMenuItem *item, gpointer data)
     } else {
 	conf_free(newconf);
     }
-    sfree(title);
-    inst->reconfiguring = FALSE;
 }
 
 static void change_font_size(struct gui_data *inst, int increment)
@@ -4348,9 +4541,9 @@ static void start_backend(struct gui_data *inst)
 	char *msg = dupprintf("Unable to open connection to %s:\n%s",
 			      conf_dest(inst->conf), error);
 	inst->exited = TRUE;
-	fatal_message_box(inst->window, msg);
+	connection_fatal(inst, msg);
 	sfree(msg);
-	exit(0);
+        return;
     }
 
     s = conf_get_str(inst->conf, CONF_wintitle);
@@ -4374,6 +4567,7 @@ static void start_backend(struct gui_data *inst)
     gtk_widget_set_sensitive(inst->restartitem, FALSE);
 }
 
+#if GTK_CHECK_VERSION(2,0,0)
 static void get_monitor_geometry(GtkWidget *widget, GdkRectangle *geometry)
 {
 #if GTK_CHECK_VERSION(3,4,0)
@@ -4397,8 +4591,9 @@ static void get_monitor_geometry(GtkWidget *widget, GdkRectangle *geometry)
     geometry->height = gdk_screen_height();
 #endif
 }
+#endif
 
-struct gui_data *new_session_window(Conf *conf, const char *geometry_string)
+void new_session_window(Conf *conf, const char *geometry_string)
 {
     struct gui_data *inst;
 
@@ -4444,17 +4639,21 @@ struct gui_data *new_session_window(Conf *conf, const char *geometry_string)
     inst->area = gtk_drawing_area_new();
     gtk_widget_set_name(GTK_WIDGET(inst->area), "drawing-area");
 
+    {
+        char *errmsg = setup_fonts_ucs(inst);
+        if (errmsg) {
+            window_setup_error(errmsg);
+            sfree(errmsg);
+            gtk_widget_destroy(inst->area);
+            sfree(inst);
+            return;
+        }
+    }
+
 #if GTK_CHECK_VERSION(2,0,0)
     inst->imc = gtk_im_multicontext_new();
 #endif
 
-    {
-        char *errmsg = setup_fonts_ucs(inst);
-        if (errmsg) {
-            fprintf(stderr, "%s: %s\n", appname, errmsg);
-            exit(1);
-        }
-    }
     inst->window = make_gtk_toplevel_window(inst);
     gtk_widget_set_name(GTK_WIDGET(inst->window), "top-level");
     {
@@ -4723,11 +4922,10 @@ struct gui_data *new_session_window(Conf *conf, const char *geometry_string)
     term_size(inst->term, inst->height, inst->width,
 	      conf_get_int(inst->conf, CONF_savelines));
 
-    start_backend(inst);
-
-    ldisc_echoedit_update(inst->ldisc);     /* cause ldisc to notice changes */
-
     inst->exited = FALSE;
 
-    return inst;
+    start_backend(inst);
+
+    if (inst->ldisc) /* early backend failure might make this NULL already */
+        ldisc_echoedit_update(inst->ldisc); /* cause ldisc to notice changes */
 }

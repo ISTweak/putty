@@ -121,12 +121,21 @@ unsigned long getticks(void);
 
 /* The per-session frontend structure managed by gtkwin.c */
 struct gui_data;
-struct gui_data *new_session_window(Conf *conf, const char *geometry_string);
+
+/* Callback when a dialog box finishes, and a no-op implementation of it */
+typedef void (*post_dialog_fn_t)(void *ctx, int result);
+void trivial_post_dialog_fn(void *vctx, int result);
+
+/* Start up a session window, with or without a preliminary config box */
+void initial_config_box(Conf *conf, post_dialog_fn_t after, void *afterctx);
+void new_session_window(Conf *conf, const char *geometry_string);
 
 /* Defined in gtkmain.c */
 void launch_duplicate_session(Conf *conf);
 void launch_new_session(void);
 void launch_saved_session(const char *str);
+void session_window_closed(void);
+void window_setup_error(const char *errmsg);
 #ifdef MAY_REFER_TO_GTK_IN_HEADERS
 GtkWidget *make_gtk_toplevel_window(void *frontend);
 #endif
@@ -140,22 +149,47 @@ int font_dimension(void *frontend, int which);/* 0 for width, 1 for height */
 long get_windowid(void *frontend);
 
 /* Things gtkdlg.c needs from pterm.c */
-void *get_window(void *frontend);      /* void * to avoid depending on gtk.h */
-void post_main(void);     /* called after any subsidiary gtk_main() */
+#ifdef MAY_REFER_TO_GTK_IN_HEADERS
+GtkWidget *get_window(void *frontend);
+enum DialogSlot {
+    DIALOG_SLOT_RECONFIGURE,
+    DIALOG_SLOT_NETWORK_PROMPT,
+    DIALOG_SLOT_LOGFILE_PROMPT,
+    DIALOG_SLOT_WARN_ON_CLOSE,
+    DIALOG_SLOT_CONNECTION_FATAL,
+    DIALOG_SLOT_LIMIT /* must remain last */
+};
+void register_dialog(void *frontend, enum DialogSlot slot, GtkWidget *dialog);
+void unregister_dialog(void *frontend, enum DialogSlot slot);
+#endif
 
 /* Things pterm.c needs from gtkdlg.c */
-int do_config_box(const char *title, Conf *conf,
-		  int midsession, int protcfginfo);
-void fatal_message_box(void *window, const char *msg);
+#ifdef MAY_REFER_TO_GTK_IN_HEADERS
+GtkWidget *create_config_box(const char *title, Conf *conf,
+                             int midsession, int protcfginfo,
+                             post_dialog_fn_t after, void *afterctx);
+#endif
 void nonfatal_message_box(void *window, const char *msg);
 void about_box(void *window);
 void *eventlogstuff_new(void);
 void showeventlog(void *estuff, void *parentwin);
 void logevent_dlg(void *estuff, const char *string);
-int reallyclose(void *frontend);
 #ifdef MAY_REFER_TO_GTK_IN_HEADERS
-int messagebox(GtkWidget *parentwin, const char *title,
-               const char *msg, int minwid, int selectable, ...);
+struct message_box_button {
+    const char *title;
+    char shortcut;
+    int type; /* more negative means more appropriate to be the Esc action */
+    int value;     /* message box's return value if this is pressed */
+};
+struct message_box_buttons {
+    const struct message_box_button *buttons;
+    int nbuttons;
+};
+extern const struct message_box_buttons buttons_yn, buttons_ok;
+GtkWidget *create_message_box(
+    GtkWidget *parentwin, const char *title, const char *msg, int minwid,
+    int selectable, const struct message_box_buttons *buttons,
+    post_dialog_fn_t after, void *afterctx);
 #endif
 
 /* Things pterm.c needs from {ptermm,uxputty}.c */
