@@ -737,9 +737,7 @@ void free_ctx(Context);
 void palette_set(void *frontend, int, int, int, int);
 void palette_reset(void *frontend);
 int palette_get(void *frontend, int n, int *r, int *g, int *b);
-void write_aclip(void *frontend, char *, int, int);
 void write_clip(void *frontend, wchar_t *, int *, truecolour *, int, int);
-void get_clip(void *frontend, wchar_t **, int *);
 void optimised_move(void *frontend, int, int, int);
 void set_raw_mouse_mode(void *frontend, int);
 void connection_fatal(void *frontend, const char *, ...);
@@ -1206,7 +1204,7 @@ void term_deselect(Terminal *);
 void term_update(Terminal *);
 void term_invalidate(Terminal *);
 void term_blink(Terminal *, int set_cursor);
-void term_do_paste(Terminal *);
+void term_do_paste(Terminal *, const wchar_t *, int);
 void term_nopaste(Terminal *);
 int term_ldisc(Terminal *, int option);
 void term_copyall(Terminal *);
@@ -1335,6 +1333,11 @@ void pinger_free(Pinger);
 #include "misc.h"
 int conf_launchable(Conf *conf);
 char const *conf_dest(Conf *conf);
+
+/*
+ * Exports from sessprep.c.
+ */
+void prepare_session(Conf *conf);
 
 /*
  * Exports from sercfg.c.
@@ -1505,8 +1508,14 @@ int cmdline_process_param(const char *, char *, int, Conf *);
 void cmdline_run_saved(Conf *);
 void cmdline_cleanup(void);
 int cmdline_get_passwd_input(prompts_t *p, const unsigned char *in, int inlen);
+int cmdline_host_ok(Conf *);
 #define TOOLTYPE_FILETRANSFER 1
 #define TOOLTYPE_NONNETWORK 2
+#define TOOLTYPE_HOST_ARG 4
+#define TOOLTYPE_HOST_ARG_CAN_BE_SESSION 8
+#define TOOLTYPE_HOST_ARG_PROTOCOL_PREFIX 16
+#define TOOLTYPE_HOST_ARG_FROM_LAUNCHABLE_LOAD 32
+#define TOOLTYPE_PORT_ARG 64
 extern int cmdline_tooltype;
 
 void cmdline_error(const char *, ...);

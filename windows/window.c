@@ -107,7 +107,7 @@ static int is_full_screen(void);
 static void make_full_screen(void);
 static void clear_full_screen(void);
 static void flip_full_screen(void);
-static int process_clipdata(HGLOBAL clipdata, int unicode);
+static void process_clipdata(HGLOBAL clipdata, int unicode);
 
 /* Window layout information */
 static void reset_window(int);
@@ -136,9 +136,6 @@ static int reconfiguring = FALSE;
 static const struct telnet_special *specials = NULL;
 static HMENU specials_menu = NULL;
 static int n_specials = 0;
-
-static wchar_t *clipboard_contents;
-static size_t clipboard_length;
 
 #define TIMING_TIMER_ID 1234
 static long timing_next_time;
@@ -442,11 +439,12 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
     HRESULT hr;
     int guess_width, guess_height;
 
-	dll_hijacking_protection();
+    dll_hijacking_protection();
 
     hinst = inst;
     hwnd = NULL;
     flags = FLAG_VERBOSE | FLAG_INTERACTIVE;
+    cmdline_tooltype |= TOOLTYPE_HOST_ARG | TOOLTYPE_PORT_ARG;
 
     sk_init();
 
@@ -503,13 +501,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
      */
     {
 	char *p;
-	int got_host = 0;
-	/* By default, we bring up the config dialog, rather than launching
-	 * a session. This gets set to TRUE if something happens to change
-	 * that (e.g., a hostname is specified on the command-line). */
-	int allow_launch = FALSE;
-	int argc;
-	char **argv;
+        int special_launchable_argument = FALSE;
 
 	default_protocol = be_default_protocol;
 	/* Find the appropriate default port. */
@@ -583,7 +575,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	    if (!conf_launchable(conf) && !do_config()) {
 		cleanup_exit(0);
 	    }
-	    allow_launch = TRUE;    /* allow it to be launched directly */
+            special_launchable_argument = TRUE;
 	} else if (*p == '&') {
 	    /*
 	     * An initial & means we've been given a command line
@@ -603,7 +595,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 	    } else if (!do_config()) {
 		cleanup_exit(0);
 	    }
-	    allow_launch = TRUE;
+            special_launchable_argument = TRUE;
 	} else if (!*p) {
             /* Do-nothing case for an empty command line - or rather,
              * for a command line that's empty _after_ we strip off
@@ -658,52 +650,7 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 		    pgp_fingerprints();
 		    exit(1);
 		} else if (*p != '-') {
-		    char *q = p;
-		    if (got_host) {
-			/*
-			 * If we already have a host name, treat
-			 * this argument as a port number. NB we
-			 * have to treat this as a saved -P
-			 * argument, so that it will be deferred
-			 * until it's a good moment to run it.
-			 */
-			int ret = cmdline_process_param("-P", p, 1, conf);
-			assert(ret == 2);
-		    } else if (!strncmp(q, "telnet:", 7)) {
-			/*
-			 * If the hostname starts with "telnet:",
-			 * set the protocol to Telnet and process
-			 * the string as a Telnet URL.
-			 */
-			char c;
-
-			q += 7;
-			if (q[0] == '/' && q[1] == '/')
-			    q += 2;
-			conf_set_int(conf, CONF_protocol, PROT_TELNET);
-			p = q;
-                        p += host_strcspn(p, ":/");
-			c = *p;
-			if (*p)
-			    *p++ = '\0';
-			if (c == ':')
-			    conf_set_int(conf, CONF_port, atoi(p));
-			else
-			    conf_set_int(conf, CONF_port, -1);
-			conf_set_str(conf, CONF_host, q);
-			got_host = 1;
-		    } else {
-			/*
-			 * Otherwise, treat this argument as a host
-			 * name.
-			 */
-			while (*p && !isspace(*p))
-			    p++;
-			if (*p)
-			    *p++ = '\0';
-			conf_set_str(conf, CONF_host, q);
-			got_host = 1;
-		    }
+		    cmdline_error("unexpected argument \"%s\"", p);
 		} else {
 		    cmdline_error("unknown option \"%s\"", p);
 		}
@@ -712,70 +659,16 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
 
 	cmdline_run_saved(conf);
 
-	if (loaded_session || got_host)
-	    allow_launch = TRUE;
-
-	if ((!allow_launch || !conf_launchable(conf)) && !do_config()) {
-	    cleanup_exit(0);
-	}
-
 	/*
-	 * Muck about with the hostname in various ways.
-	 */
-	{
-	    char *hostbuf = dupstr(conf_get_str(conf, CONF_host));
-	    char *host = hostbuf;
-	    char *p, *q;
-
-	    /*
-	     * Trim leading whitespace.
-	     */
-	    host += strspn(host, " \t");
-
-	    /*
-	     * See if host is of the form user@host, and separate
-	     * out the username if so.
-	     */
-	    if (host[0] != '\0') {
-		char *atsign = strrchr(host, '@');
-		if (atsign) {
-		    *atsign = '\0';
-		    conf_set_str(conf, CONF_username, host);
-		    host = atsign + 1;
-		}
-	    }
-
-            /*
-             * Trim a colon suffix off the hostname if it's there. In
-             * order to protect unbracketed IPv6 address literals
-             * against this treatment, we do not do this if there's
-             * _more_ than one colon.
-             */
-            {
-                char *c = host_strchr(host, ':');
- 
-                if (c) {
-                    char *d = host_strchr(c+1, ':');
-                    if (!d)
-                        *c = '\0';
-                }
-            }
-
-	    /*
-	     * Remove any remaining whitespace.
-	     */
-	    p = hostbuf;
-	    q = host;
-	    while (*q) {
-		if (*q != ' ' && *q != '\t')
-		    *p++ = *q;
-		q++;
-	    }
-	    *p = '\0';
-
-	    conf_set_str(conf, CONF_host, hostbuf);
-	    sfree(hostbuf);
+         * Bring up the config dialog if the command line hasn't
+         * (explicitly) specified a launchable configuration.
+         */
+        if (!(special_launchable_argument || cmdline_host_ok(conf))) {
+            if (!do_config())
+                cleanup_exit(0);
 	}
+
+        prepare_session(conf);
     }
 
     if (!prev) {
@@ -3643,8 +3536,7 @@ static LRESULT CALLBACK WndProc(HWND hwnd, UINT message,
 	}
 	return 0;
       case WM_GOT_CLIPDATA:
-	if (process_clipdata((HGLOBAL)lParam, wParam))
-	    term_do_paste(term);
+	process_clipdata((HGLOBAL)lParam, wParam);
 	return 0;
       /* Reconnect */
       case WM_POWERBROADCAST:
@@ -4699,6 +4591,15 @@ static int TranslateKey(UINT message, WPARAM wParam, LPARAM lParam,
 	    SendMessage(hwnd, WM_VSCROLL, SB_PAGEUP, 0);
 	    return 0;
 	}
+        if (wParam == VK_PRIOR && shift_state == 3) { /* ctrl-shift-pageup */
+            SendMessage(hwnd, WM_VSCROLL, SB_TOP, 0);
+            return 0;
+        }
+        if (wParam == VK_NEXT && shift_state == 3) { /* ctrl-shift-pagedown */
+            SendMessage(hwnd, WM_VSCROLL, SB_BOTTOM, 0);
+            return 0;
+        }
+
 	if (wParam == VK_PRIOR && shift_state == 2) {
 	    SendMessage(hwnd, WM_VSCROLL, SB_LINEUP, 0);
 	    return 0;
@@ -5913,11 +5814,10 @@ static DWORD WINAPI clipboard_read_threadfunc(void *param)
     return 0;
 }
 
-static int process_clipdata(HGLOBAL clipdata, int unicode)
+static void process_clipdata(HGLOBAL clipdata, int unicode)
 {
-    sfree(clipboard_contents);
-    clipboard_contents = NULL;
-    clipboard_length = 0;
+    wchar_t *clipboard_contents = NULL;
+    size_t clipboard_length = 0;
 
     if (unicode) {
 	wchar_t *p = GlobalLock(clipdata);
@@ -5930,7 +5830,7 @@ static int process_clipdata(HGLOBAL clipdata, int unicode)
 	    clipboard_contents = snewn(clipboard_length + 1, wchar_t);
 	    memcpy(clipboard_contents, p, clipboard_length * sizeof(wchar_t));
 	    clipboard_contents[clipboard_length] = L'\0';
-	    return TRUE;
+	    term_do_paste(term, clipboard_contents, clipboard_length);
 	}
     } else {
 	char *s = GlobalLock(clipdata);
@@ -5943,11 +5843,11 @@ static int process_clipdata(HGLOBAL clipdata, int unicode)
 				clipboard_contents, i);
 	    clipboard_length = i - 1;
 	    clipboard_contents[clipboard_length] = L'\0';
-	    return TRUE;
+	    term_do_paste(term, clipboard_contents, clipboard_length);
 	}
     }
 
-    return FALSE;
+    sfree(clipboard_contents);
 }
 
 void request_paste(void *frontend)
@@ -5971,14 +5871,6 @@ void request_paste(void *frontend)
     DWORD in_threadid; /* required for Win9x */
     CreateThread(NULL, 0, clipboard_read_threadfunc,
 		 hwnd, 0, &in_threadid);
-}
-
-void get_clip(void *frontend, wchar_t **p, int *len)
-{
-    if (p) {
-	*p = clipboard_contents;
-	*len = clipboard_length;
-    }
 }
 
 #if 0

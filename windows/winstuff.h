@@ -246,6 +246,15 @@ GLOBAL void *logctx;
 #define WM_ENACT_PENDING_NETEVENT  (WM_APP + 9)
 
 /*
+ * Windows-specific clipboard helper function shared with windlg.c,
+ * which takes the data string in the system code page instead of
+ * Unicode.
+ */
+void write_aclip(void *frontend, char *, int, int);
+
+#define WM_NETEVENT  (WM_APP + 5)
+
+/*
  * On Windows, we send MA_2CLK as the only event marking the second
  * press of a mouse button. Compare unix.h.
  */

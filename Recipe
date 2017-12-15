@@ -235,14 +235,14 @@ TERMINAL = terminal wcwidth ldiscucs logging tree234 minibidi
 
 # GUI front end and terminal emulator (putty, puttytel).
 GUITERM  = TERMINAL window windlg winctrls sizetip winprint winutils
-	 + wincfg sercfg winhelp winjump
+	 + wincfg sercfg winhelp winjump sessprep
          + cygcfg
 
 # Same thing on Unix.
 UXTERM   = TERMINAL uxcfg sercfg uxucs uxprint timing callback miscucs
          + uxl10n
 GTKTERM  = UXTERM gtkwin gtkcfg gtkdlg gtkfont gtkcols gtkmisc xkeysym
-	 + x11misc gtkcomm
+	 + x11misc gtkcomm sessprep
 GTKMAIN  = gtkmain cmdline
 
 # Non-SSH back ends (putty, puttytel, plink).
@@ -307,7 +307,7 @@ putty    : [G] GUITERM NONSSH WINSSH W_BE_ALL WINMISC winx11 putty.res LIBS
 puttytel : [G] GUITERM NONSSH W_BE_NOSSH WINMISC puttytel.res nogss LIBS
          + winl10n
 plink    : [C] winplink wincons NONSSH WINSSH W_BE_ALL logging WINMISC
-         + winx11 plink.res winnojmp noterm LIBS
+         + winx11 plink.res winnojmp sessprep noterm LIBS
          + winl10ndummy
 plinkw   : [G] winplinkw winconsw NONSSH WINSSH W_BE_ALL logging WINMISC
          + winx11 plinkw.res winnojmp noterm LIBS
@@ -349,7 +349,7 @@ puttytel : [X] GTKTERM uxmisc misc ldisc settings uxsel U_BE_NOSSH
          + uxl10n
 
 plink    : [U] uxplink uxcons NONSSH UXSSH U_BE_ALL logging UXMISC uxsignal
-         + ux_x11 noterm uxnogtk cmdline
+         + ux_x11 noterm uxnogtk sessprep cmdline
          + uxl10n
 
 PUTTYGEN_UNIX = sshrsag sshdssg sshprime sshdes sshbn sshmd5 version
