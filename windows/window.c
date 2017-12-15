@@ -501,6 +501,8 @@ int WINAPI WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmdline, int show)
      */
     {
 	char *p;
+        int argc;
+        char **argv;
         int special_launchable_argument = FALSE;
 
 	default_protocol = be_default_protocol;
