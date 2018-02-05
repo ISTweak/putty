@@ -29,7 +29,6 @@
 /* this potential one of the Meta keys needs manual handling */
 #define META_MANUAL_MASK (GDK_MOD1_MASK)
 #define JUST_USE_GTK_CLIPBOARD_UTF8 /* low-level gdk_selection_* fails */
-#define DEFAULT_CLIPBOARD GDK_SELECTION_CLIPBOARD /* OS X has no PRIMARY */
 
 #define BUILDINFO_PLATFORM_GTK "OS X (GTK)"
 #define BUILDINFO_GTK
@@ -119,6 +118,48 @@ unsigned long getticks(void);
  */
 #define FLAG_STDERR_TTY 0x1000
 
+#define PLATFORM_CLIPBOARDS(X)                            \
+    X(CLIP_PRIMARY, "X11 primary selection")              \
+    X(CLIP_CLIPBOARD, "XDG clipboard")                    \
+    X(CLIP_CUSTOM_1, "<custom#1>")                        \
+    X(CLIP_CUSTOM_2, "<custom#2>")                        \
+    X(CLIP_CUSTOM_3, "<custom#3>")                        \
+    /* end of list */
+
+#ifdef OSX_GTK
+/* OS X has no PRIMARY selection */
+#define MOUSE_SELECT_CLIPBOARD CLIP_NULL
+#define MOUSE_PASTE_CLIPBOARD CLIP_LOCAL
+#define CLIPNAME_IMPLICIT "Last selected text"
+#define CLIPNAME_EXPLICIT "System clipboard"
+#define CLIPNAME_EXPLICIT_OBJECT "system clipboard"
+/* These defaults are the ones that more or less comply with the OS X
+ * Human Interface Guidelines, i.e. copy/paste to the system clipboard
+ * is _not_ implicit but requires a specific UI action. This is at
+ * odds with all other PuTTY front ends' defaults, but on OS X there
+ * is no multi-decade precedent for PuTTY working the other way. */
+#define CLIPUI_DEFAULT_AUTOCOPY FALSE
+#define CLIPUI_DEFAULT_MOUSE CLIPUI_IMPLICIT
+#define CLIPUI_DEFAULT_INS CLIPUI_EXPLICIT
+#define MENU_CLIPBOARD CLIP_CLIPBOARD
+#define COPYALL_CLIPBOARDS CLIP_CLIPBOARD
+#else
+#define MOUSE_SELECT_CLIPBOARD CLIP_PRIMARY
+#define MOUSE_PASTE_CLIPBOARD CLIP_PRIMARY
+#define CLIPNAME_IMPLICIT "PRIMARY"
+#define CLIPNAME_EXPLICIT "CLIPBOARD"
+#define CLIPNAME_EXPLICIT_OBJECT "CLIPBOARD"
+/* These defaults are the ones Unix PuTTY has historically had since
+ * it was first thought of in 2002 */
+#define CLIPUI_DEFAULT_AUTOCOPY FALSE
+#define CLIPUI_DEFAULT_MOUSE CLIPUI_IMPLICIT
+#define CLIPUI_DEFAULT_INS CLIPUI_IMPLICIT
+#define MENU_CLIPBOARD CLIP_CLIPBOARD
+#define COPYALL_CLIPBOARDS CLIP_PRIMARY, CLIP_CLIPBOARD
+/* X11 supports arbitrary named clipboards */
+#define NAMED_CLIPBOARDS
+#endif
+
 /* The per-session frontend structure managed by gtkwin.c */
 struct gui_data;
 
@@ -142,6 +183,14 @@ GtkWidget *make_gtk_toplevel_window(void *frontend);
 
 /* Defined in gtkcomm.c */
 void gtkcomm_setup(void);
+
+/* Used to pass application-menu operations from gtkapp.c to gtkwin.c */
+enum MenuAction {
+    MA_COPY, MA_PASTE, MA_COPY_ALL, MA_DUPLICATE_SESSION,
+    MA_RESTART_SESSION, MA_CHANGE_SETTINGS, MA_CLEAR_SCROLLBACK,
+    MA_RESET_TERMINAL, MA_EVENT_LOG
+};
+void app_menu_action(void *frontend, enum MenuAction);
 
 /* Things pty.c needs from pterm.c */
 const char *get_x_display(void *frontend);

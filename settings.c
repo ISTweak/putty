@@ -447,6 +447,54 @@ static void wprefs(void *sesskey, const char *name,
     sfree(buf);
 }
 
+static void write_clip_setting(void *handle, const char *savekey,
+                               Conf *conf, int confkey, int strconfkey)
+{
+    int val = conf_get_int(conf, confkey);
+    switch (val) {
+      case CLIPUI_NONE:
+      default:
+        write_setting_s(handle, savekey, "none");
+        break;
+      case CLIPUI_IMPLICIT:
+        write_setting_s(handle, savekey, "implicit");
+        break;
+      case CLIPUI_EXPLICIT:
+        write_setting_s(handle, savekey, "explicit");
+        break;
+      case CLIPUI_CUSTOM:
+        {
+            char *sval = dupcat("custom:", conf_get_str(conf, strconfkey),
+                                (const char *)NULL);
+            write_setting_s(handle, savekey, sval);
+            sfree(sval);
+        }
+        break;
+    }
+}
+
+static void read_clip_setting(void *handle, const char *savekey,
+                              int def, Conf *conf, int confkey, int strconfkey)
+{
+    char *setting = read_setting_s(handle, savekey);
+    int val;
+
+    conf_set_str(conf, strconfkey, "");
+    if (!setting) {
+        val = def;
+    } else if (!strcmp(setting, "implicit")) {
+        val = CLIPUI_IMPLICIT;
+    } else if (!strcmp(setting, "explicit")) {
+        val = CLIPUI_EXPLICIT;
+    } else if (!strncmp(setting, "custom:", 7)) {
+        val = CLIPUI_CUSTOM;
+        conf_set_str(conf, strconfkey, setting + 7);
+    } else {
+        val = CLIPUI_NONE;
+    }
+    conf_set_int(conf, confkey, val);
+}
+
 char *save_settings(const char *section, Conf *conf)
 {
     void *sesskey;
@@ -598,8 +646,6 @@ void save_open_settings(void *sesskey, Conf *conf)
     write_setting_i(sesskey, "CRImpliesLF", conf_get_int(conf, CONF_crhaslf));
     write_setting_i(sesskey, "DisableArabicShaping", conf_get_int(conf, CONF_arabicshaping));
     write_setting_i(sesskey, "DisableBidi", conf_get_int(conf, CONF_bidi));
-    write_setting_i(sesskey, "ClipModify", conf_get_int(conf, CONF_clip_modify));
-    write_setting_i(sesskey, "ClipQuery", conf_get_int(conf, CONF_clip_query));
     write_setting_i(sesskey, "WinNameAlways", conf_get_int(conf, CONF_win_name_always));
     write_setting_s(sesskey, "WinTitle", conf_get_str(conf, CONF_wintitle));
     write_setting_i(sesskey, "TermWidth", conf_get_int(conf, CONF_width));
@@ -640,6 +686,14 @@ void save_open_settings(void *sesskey, Conf *conf)
 	}
 	write_setting_s(sesskey, buf, buf2);
     }
+    write_setting_i(sesskey, "MouseAutocopy",
+                    conf_get_int(conf, CONF_mouseautocopy));
+    write_clip_setting(sesskey, "MousePaste", conf,
+                       CONF_mousepaste, CONF_mousepaste_custom);
+    write_clip_setting(sesskey, "CtrlShiftIns", conf,
+                       CONF_ctrlshiftins, CONF_ctrlshiftins_custom);
+    write_clip_setting(sesskey, "CtrlShiftCV", conf,
+                       CONF_ctrlshiftcv, CONF_ctrlshiftcv_custom);
     write_setting_s(sesskey, "LineCodePage", conf_get_str(conf, CONF_line_codepage));
     write_setting_i(sesskey, "CJKAmbigWide", conf_get_int(conf, CONF_cjk_ambig_wide));
     write_setting_i(sesskey, "UTF8Override", conf_get_int(conf, CONF_utf8_override));
@@ -1047,8 +1101,6 @@ void load_open_settings(void *sesskey, Conf *conf)
     gppi(sesskey, "CRImpliesLF", 0, conf, CONF_crhaslf);
     gppi(sesskey, "DisableArabicShaping", 0, conf, CONF_arabicshaping);
     gppi(sesskey, "DisableBidi", 0, conf, CONF_bidi);
-    gppi(sesskey, "ClipModify", 0, conf, CONF_clip_modify);
-    gppi(sesskey, "ClipQuery", 0, conf, CONF_clip_query);
     gppi(sesskey, "WinNameAlways", 1, conf, CONF_win_name_always);
     gpps(sesskey, "WinTitle", "", conf, CONF_wintitle);
     gppi(sesskey, "TermWidth", 80, conf, CONF_width);
@@ -1114,6 +1166,14 @@ void load_open_settings(void *sesskey, Conf *conf)
 	}
 	sfree(buf2);
     }
+    gppi(sesskey, "MouseAutocopy", CLIPUI_DEFAULT_AUTOCOPY,
+         conf, CONF_mouseautocopy);
+    read_clip_setting(sesskey, "MousePaste", CLIPUI_DEFAULT_MOUSE,
+                      conf, CONF_mousepaste, CONF_mousepaste_custom);
+    read_clip_setting(sesskey, "CtrlShiftIns", CLIPUI_DEFAULT_INS,
+                      conf, CONF_ctrlshiftins, CONF_ctrlshiftins_custom);
+    read_clip_setting(sesskey, "CtrlShiftCV", CLIPUI_NONE,
+                      conf, CONF_ctrlshiftcv, CONF_ctrlshiftcv_custom);
     /*
      * The empty default for LineCodePage will be converted later
      * into a plausible default for the locale.

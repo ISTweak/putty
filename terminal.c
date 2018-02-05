@@ -113,100 +113,6 @@ static void parse_optionalrgb(optionalrgb *out, unsigned *values);
 static void scroll_display(Terminal *, int, int, int);
 #endif /* OPTIMISE_SCROLL */
 
-/* OSC clip */
-#include "ssh.h"
-static void osc_get_clip(Terminal *term)
-{
-    wchar_t *wbuff;
-    int wlen;
-    int mlen = conf_get_int(term->conf, CONF_clip_query);
-
-    get_clip(term->frontend, &wbuff, &wlen);
-    wlen = min(wlen, mlen);
-
-    if (wlen) {
-	char *buff = snewn(wlen * 6, char);
-	int len = - 1 + wc_to_mb(term->ucsdata->line_codepage, 0, wbuff, wlen,
-				 buff, wlen * 6, NULL, NULL,
-				 in_utf(term) ? NULL : term->ucsdata);
-	char *b = buff;
-	int pd_len = ((len - 1) / 3 + 1) * 4  + 7 + 2;
-	char *pd = snewn(pd_len, char);
-	char *p = pd;
-
-	memcpy(p, "\033]52;c;", 7 * sizeof(char));
-	p += 7;
-
-	while (len > 0) {
-	    int n = (len < 3) ? len : 3;
-
-	    base64_encode_atom(b, n, p);
-	    p += 4;
-	    b += 3;
-	    len -= 3;
-	}
-
-	memcpy(p, "\033\\", 2 * sizeof(char));
-	ldisc_send(term->ldisc, pd, pd_len, 0);
-
-	sfree(pd);
-	sfree(buff);
-    }
-
-    get_clip(term->frontend, NULL, NULL);
-}
-
-static void osc_clip(Terminal *term)
-{
-    char *pc = dupstr(term->osc_string);
-    char *pd = strchr(pc, ';');
-    if (!pd) {
-	return;
-    }
-    *pd = '\0';
-    pd++;
-
-    if (pd[0] == '?') {
-	term->osc_clipping = TRUE;;
-	request_paste(term->frontend);
-    } else {
-	int pd_len = strlen(pd);
-	int mlen = conf_get_int(term->conf, CONF_clip_modify);
-
-	if (mlen && pd_len && !(pd_len % 4)) {
-	    int len = pd_len * 3 / 4;
-	    char *buff = snewn(len, char);
-	    char *p = buff;
-	    wchar_t *wbuff;
-	    int wlen;
-
-	    while (pd_len) {
-		int n = base64_decode_atom(pd, p);
-		if (n < 3) {
-		    len = len - 3 + (n ? n : 3);
-		    break;
-		}
-		p += 3;
-		pd += 4;
-		pd_len -= 4;
-	    }
-
-	    wlen = mb_to_wc(term->ucsdata->line_codepage,
-			    0, buff, len, NULL, 0);
-	    wlen = min(wlen, mlen + 1);
-	    wbuff = snewn(wlen, wchar_t);
-	    wlen = mb_to_wc(term->ucsdata->line_codepage,
-			    0, buff, len, wbuff, wlen);
-	    write_clip(term->frontend, wbuff, NULL, NULL, wlen, 0);
-
-	    sfree(wbuff);
-	    sfree(buff);
-	}
-    }
-
-    sfree(pc);
-}
-
 /* Hyperlink */
 static int mb_to_uc(int codepage, int flags, char *mbstr, int mblen,
 		    unsigned long *ucstr, int uclen)
@@ -1449,7 +1355,6 @@ static void power_on(Terminal *term, int clear)
     term->urxvt_extended_mouse = 0;
     set_raw_mouse_mode(term->frontend, FALSE);
     term->bracketed_paste = FALSE;
-    term->osc_clipping = FALSE;
     {
 	int i;
 	for (i = 0; i < 256; i++)
@@ -1850,6 +1755,16 @@ Terminal *term_init(Conf *myconf, struct unicode_data *ucsdata,
     term->basic_erase_char.truecolour.fg = optionalrgb_none;
     term->basic_erase_char.truecolour.bg = optionalrgb_none;
     term->erase_char = term->basic_erase_char;
+
+    term->last_selected_text = NULL;
+    term->last_selected_attr = NULL;
+    term->last_selected_tc = NULL;
+    term->last_selected_len = 0;
+    /* frontends will typically extend these with clipboard ids they
+     * know about */
+    term->mouse_select_clipboards[0] = CLIP_LOCAL;
+    term->n_mouse_select_clipboards = 1;
+    term->mouse_paste_clipboard = CLIP_NULL;
 
     return term;
 }
@@ -3032,9 +2947,6 @@ static void do_osc(Terminal *term)
 	  case 111:
 	  case 112:
 	    osc_colour(term);
-	    break;
-	  case 52:
-	    osc_clip(term);
 	    break;
 	}
     }
@@ -6116,7 +6028,8 @@ static void clip_addchar(clip_workbuf *b, wchar_t chr, int attr, truecolour tc)
     b->bufpos++;
 }
 
-static void clipme(Terminal *term, pos top, pos bottom, int rect, int desel)
+static void clipme(Terminal *term, pos top, pos bottom, int rect, int desel,
+                   const int *clipboards, int n_clipboards)
 {
     clip_workbuf buf;
     int old_top_x;
@@ -6285,14 +6198,36 @@ static void clipme(Terminal *term, pos top, pos bottom, int rect, int desel)
 #if SELECTION_NUL_TERMINATED
     clip_addchar(&buf, 0, 0, term->basic_erase_char.truecolour);
 #endif
-    /* Finally, transfer all that to the clipboard. */
-    write_clip(term->frontend, buf.textbuf, buf.attrbuf, buf.tcbuf, buf.bufpos, desel);
-    sfree(buf.textbuf);
-    sfree(buf.attrbuf);
-    sfree(buf.tcbuf);
+    /* Finally, transfer all that to the clipboard(s). */
+    {
+        int i;
+        int clip_local = FALSE;
+        for (i = 0; i < n_clipboards; i++) {
+            if (clipboards[i] == CLIP_LOCAL) {
+                clip_local = TRUE;
+            } else if (clipboards[i] != CLIP_NULL) {
+                write_clip(term->frontend, clipboards[i],
+                           buf.textbuf, buf.attrbuf, buf.tcbuf, buf.bufpos,
+                           desel);
+            }
+        }
+        if (clip_local) {
+            sfree(term->last_selected_text);
+            sfree(term->last_selected_attr);
+            sfree(term->last_selected_tc);
+            term->last_selected_text = buf.textbuf;
+            term->last_selected_attr = buf.attrbuf;
+            term->last_selected_tc = buf.tcbuf;
+            term->last_selected_len = buf.bufpos;
+        } else {
+            sfree(buf.textbuf);
+            sfree(buf.attrbuf);
+            sfree(buf.tcbuf);
+        }
+    }
 }
 
-void term_copyall(Terminal *term)
+void term_copyall(Terminal *term, const int *clipboards, int n_clipboards)
 {
     pos top;
     pos bottom;
@@ -6301,7 +6236,44 @@ void term_copyall(Terminal *term)
     top.x = 0;
     bottom.y = find_last_nonempty_line(term, screen);
     bottom.x = term->cols;
-    clipme(term, top, bottom, 0, TRUE);
+    clipme(term, top, bottom, 0, TRUE, clipboards, n_clipboards);
+}
+
+static void paste_from_clip_local(void *vterm)
+{
+    Terminal *term = (Terminal *)vterm;
+    term_do_paste(term, term->last_selected_text, term->last_selected_len);
+}
+
+void term_request_copy(Terminal *term, const int *clipboards, int n_clipboards)
+{
+    int i;
+    for (i = 0; i < n_clipboards; i++) {
+        assert(clipboards[i] != CLIP_LOCAL);
+        if (clipboards[i] != CLIP_NULL) {
+            write_clip(term->frontend, clipboards[i],
+                       term->last_selected_text,
+                       term->last_selected_attr,
+                       term->last_selected_tc,
+                       term->last_selected_len,
+                       FALSE);
+        }
+    }
+}
+
+void term_request_paste(Terminal *term, int clipboard)
+{
+    switch (clipboard) {
+      case CLIP_NULL:
+        /* Do nothing: CLIP_NULL never has data in it. */
+        break;
+      case CLIP_LOCAL:
+        queue_toplevel_callback(paste_from_clip_local, term);
+        break;
+      default:
+        frontend_request_paste(term->frontend, clipboard);
+        break;
+    }
 }
 
 /*
@@ -6959,7 +6931,9 @@ void term_mouse(Terminal *term, Mouse_Button braw, Mouse_Button bcooked,
 	     * data to the clipboard.
 	     */
 	    clipme(term, term->selstart, term->selend,
-		   (term->seltype == RECTANGULAR), FALSE);
+		   (term->seltype == RECTANGULAR), FALSE,
+                   term->mouse_select_clipboards,
+                   term->n_mouse_select_clipboards);
 	    term->selstate = SELECTED;
 	} else
 	    term->selstate = NO_SELECTION;
@@ -6969,7 +6943,7 @@ void term_mouse(Terminal *term, Mouse_Button braw, Mouse_Button bcooked,
 		   || a == MA_2CLK || a == MA_3CLK
 #endif
 		   )) {
-	request_paste(term->frontend);
+	term_request_paste(term, term->mouse_paste_clipboard);
     }
 
     /*
@@ -7033,8 +7007,12 @@ static void deselect(Terminal *term)
     term->selstart.x = term->selstart.y = term->selend.x = term->selend.y = 0;
 }
 
-void term_deselect(Terminal *term)
+void term_lost_clipboard_ownership(Terminal *term, int clipboard)
 {
+    if (!(term->n_mouse_select_clipboards > 1 &&
+          clipboard == term->mouse_select_clipboards[1]))
+        return;
+
     deselect(term);
     term_update(term);
 

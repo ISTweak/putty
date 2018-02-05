@@ -1217,7 +1217,7 @@ static char *shortcut_escape(const char *text, char shortcut)
 	lastchar = *p;
 	r = CharNext (p);
 	while (p != r)
-	     *q++ = *p++;
+	*q++ = *p++;
     }
     if (shortcut != NO_SHORTCUT) { /* Japanese style shortcut */
 	 if (lastchar == ':')

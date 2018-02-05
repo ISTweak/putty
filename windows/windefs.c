@@ -99,7 +99,7 @@ FontSpec *platform_default_fontspec(const char *name)
             else if (!strcmp(buf, "BALTIC_CHARSET")) 
                 charset = BALTIC_CHARSET;
 #endif // BALTIC_CHARSET
-            else
+    else
                 charset = ANSI_CHARSET;
 	    tmp.charset = charset;
         }

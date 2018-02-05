@@ -582,8 +582,8 @@ static void codepage_handler(union control *ctrl, void *dlg,
     } else if (event == EVENT_VALCHANGE) {
 	char *codepage = dlg_editbox_get(ctrl, dlg);
 	if (decode_codepage(codepage) != CP_UTF8 || iso2022_init_test(codepage)) {
-	    conf_set_str(conf, CONF_line_codepage,
-			 cp_name(decode_codepage(codepage)));
+	conf_set_str(conf, CONF_line_codepage,
+		     cp_name(decode_codepage(codepage)));
 	} else {
 	    conf_set_str(conf, CONF_line_codepage, codepage);
 	}
@@ -1360,6 +1360,105 @@ static void manual_hostkey_handler(union control *ctrl, void *dlg,
     }
 }
 
+static void clipboard_selector_handler(union control *ctrl, void *dlg,
+                                       void *data, int event)
+{
+    Conf *conf = (Conf *)data;
+    int setting = ctrl->generic.context.i;
+#ifdef NAMED_CLIPBOARDS
+    int strsetting = ctrl->editbox.context2.i;
+#endif
+
+    static const struct {
+        const char *name;
+        int id;
+    } options[] = {
+        {"No action", CLIPUI_NONE},
+        {CLIPNAME_IMPLICIT, CLIPUI_IMPLICIT},
+        {CLIPNAME_EXPLICIT, CLIPUI_EXPLICIT},
+    };
+
+    if (event == EVENT_REFRESH) {
+        int i, val = conf_get_int(conf, setting);
+
+        dlg_update_start(ctrl, dlg);
+        dlg_listbox_clear(ctrl, dlg);
+
+#ifdef NAMED_CLIPBOARDS
+        for (i = 0; i < lenof(options); i++)
+            dlg_listbox_add(ctrl, dlg, options[i].name);
+        if (val == CLIPUI_CUSTOM) {
+            const char *sval = conf_get_str(conf, strsetting);
+            for (i = 0; i < lenof(options); i++)
+                if (!strcmp(sval, options[i].name))
+                    break;             /* needs escaping */
+            if (i < lenof(options) || sval[0] == '=') {
+                char *escaped = dupcat("=", sval, (const char *)NULL);
+                dlg_editbox_set(ctrl, dlg, escaped);
+                sfree(escaped);
+            } else {
+                dlg_editbox_set(ctrl, dlg, sval);
+            }
+        } else {
+            dlg_editbox_set(ctrl, dlg, options[0].name); /* fallback */
+            for (i = 0; i < lenof(options); i++)
+                if (val == options[i].id)
+                    dlg_editbox_set(ctrl, dlg, options[i].name);
+        }
+#else
+        for (i = 0; i < lenof(options); i++)
+            dlg_listbox_addwithid(ctrl, dlg, options[i].name, options[i].id);
+        dlg_listbox_select(ctrl, dlg, 0); /* fallback */
+        for (i = 0; i < lenof(options); i++)
+            if (val == options[i].id)
+                dlg_listbox_select(ctrl, dlg, i);
+#endif
+	dlg_update_done(ctrl, dlg);
+    } else if (event == EVENT_SELCHANGE
+#ifdef NAMED_CLIPBOARDS
+               || event == EVENT_VALCHANGE
+#endif
+        ) {
+#ifdef NAMED_CLIPBOARDS
+        const char *sval = dlg_editbox_get(ctrl, dlg);
+        int i;
+
+        for (i = 0; i < lenof(options); i++)
+            if (!strcmp(sval, options[i].name)) {
+                conf_set_int(conf, setting, options[i].id);
+                conf_set_str(conf, strsetting, "");
+                break;
+            }
+        if (i == lenof(options)) {
+            conf_set_int(conf, setting, CLIPUI_CUSTOM);
+            if (sval[0] == '=')
+                sval++;
+            conf_set_str(conf, strsetting, sval);
+        }
+#else
+        int index = dlg_listbox_index(ctrl, dlg);
+        if (index >= 0) {
+            int val = dlg_listbox_getid(ctrl, dlg, index);
+            conf_set_int(conf, setting, val);
+        }
+#endif
+    }
+}
+
+static void clipboard_control(struct controlset *s, const char *label,
+                              char shortcut, int percentage, intorptr helpctx,
+                              int setting, int strsetting)
+{
+#ifdef NAMED_CLIPBOARDS
+    ctrl_combobox(s, label, shortcut, percentage, helpctx,
+                  clipboard_selector_handler, I(setting), I(strsetting));
+#else
+    /* strsetting isn't needed in this case */
+    ctrl_droplist(s, label, shortcut, percentage, helpctx,
+                  clipboard_selector_handler, I(setting));
+#endif
+}
+
 void setup_config_box(struct controlbox *b, int midsession,
 		      int protocol, int protcfginfo)
 {
@@ -1735,13 +1834,6 @@ void setup_config_box(struct controlbox *b, int midsession,
     ctrl_checkbox(s, "Disable bidirectional text display",
 		  'd', HELPCTX(features_bidi), conf_checkbox_handler,
 		  I(CONF_bidi));
-    s = ctrl_getset(b, "Terminal/Features", "clipboard", "Allowed maximum number of characters");
-    ctrl_editbox(s, "Clipboard modify", 'm', 20,
-		 HELPCTX(no_help),
-		 conf_editbox_handler, I(CONF_clip_modify), I(-1));
-    ctrl_editbox(s, "Clipboard query", 'y', 20,
-		 HELPCTX(no_help),
-		 conf_editbox_handler, I(CONF_clip_query), I(-1));
 
     /*
      * The Window panel.
@@ -1892,8 +1984,30 @@ void setup_config_box(struct controlbox *b, int midsession,
 		      "Normal", 'n', I(0),
 		      "Rectangular block", 'r', I(1), NULL);
 
-    s = ctrl_getset(b, "Window/Selection", "charclass",
-		    "Control the select-one-word-at-a-time mode");
+    s = ctrl_getset(b, "Window/Selection", "clipboards",
+                    "Assign copy/paste actions to clipboards");
+    ctrl_checkbox(s, "Auto-copy selected text to "
+                  CLIPNAME_EXPLICIT_OBJECT,
+                  NO_SHORTCUT, HELPCTX(selection_autocopy),
+                  conf_checkbox_handler, I(CONF_mouseautocopy));
+    clipboard_control(s, "Mouse paste action:", NO_SHORTCUT, 60,
+                      HELPCTX(selection_clipactions),
+                      CONF_mousepaste, CONF_mousepaste_custom);
+    clipboard_control(s, "{Ctrl,Shift} + Ins:", NO_SHORTCUT, 60,
+                      HELPCTX(selection_clipactions),
+                      CONF_ctrlshiftins, CONF_ctrlshiftins_custom);
+    clipboard_control(s, "Ctrl + Shift + {C,V}:", NO_SHORTCUT, 60,
+                      HELPCTX(selection_clipactions),
+                      CONF_ctrlshiftcv, CONF_ctrlshiftcv_custom);
+
+    /*
+     * The Window/Selection/Words panel.
+     */
+    ctrl_settitle(b, "Window/Selection/Words",
+                  "Options controlling word-by-word selection");
+
+    s = ctrl_getset(b, "Window/Selection/Words", "charclass",
+		    "Classes of character that group together");
     ccd = (struct charclass_data *)
 	ctrl_alloc(b, sizeof(struct charclass_data));
     ccd->listbox = ctrl_listbox(s, "Character classes:", 'e',
@@ -1923,7 +2037,7 @@ void setup_config_box(struct controlbox *b, int midsession,
 		 HELPCTX(ignore_chars),
 		 conf_editbox_handler, I(CONF_ignore_chars), I(1));
 
-	/*
+    /*
      * The Window/Colours panel.
      */
     ctrl_settitle(b, "Window/Colours", "Options controlling use of colours");

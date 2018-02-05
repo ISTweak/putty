@@ -52,7 +52,36 @@
 
 GdkAtom compound_text_atom, utf8_string_atom;
 
-struct clipboard_data_instance;
+#ifdef JUST_USE_GTK_CLIPBOARD_UTF8
+/*
+ * Because calling gtk_clipboard_set_with_data triggers a call to the
+ * clipboard_clear function from the last time, we need to arrange a
+ * way to distinguish a real call to clipboard_clear for the _new_
+ * instance of the clipboard data from the leftover call for the
+ * outgoing one. We do this by setting the user data field in our
+ * gtk_clipboard_set_with_data() call, instead of the obvious pointer
+ * to 'inst', to one of these.
+ */
+struct clipboard_data_instance {
+    char *pasteout_data_utf8;
+    int pasteout_data_utf8_len;
+    struct clipboard_state *state;
+    struct clipboard_data_instance *next, *prev;
+};
+#endif
+
+struct clipboard_state {
+    struct gui_data *inst;
+    int clipboard;
+    GdkAtom atom;
+#ifdef JUST_USE_GTK_CLIPBOARD_UTF8
+    GtkClipboard *gtkclipboard;
+    struct clipboard_data_instance *current_cdi;
+#else
+    char *pasteout_data, *pasteout_data_ctext, *pasteout_data_utf8;
+    int pasteout_data_len, pasteout_data_ctext_len, pasteout_data_utf8_len;
+#endif
+};
 
 struct gui_data {
     GtkWidget *window, *area, *sbar;
@@ -101,13 +130,14 @@ struct gui_data {
     GdkColormap *colmap;
 #endif
     int direct_to_font;
+    struct clipboard_state clipstates[N_CLIPBOARDS];
 #ifdef JUST_USE_GTK_CLIPBOARD_UTF8
-    GtkClipboard *clipboard;
-    struct clipboard_data_instance *current_cdi;
-#else
-    char *pasteout_data, *pasteout_data_ctext, *pasteout_data_utf8;
-    int pasteout_data_len, pasteout_data_ctext_len, pasteout_data_utf8_len;
+    /* Remember all clipboard_data_instance structures currently
+     * associated with this gui_data, in case they're still around
+     * when it gets destroyed */
+    struct clipboard_data_instance cdi_headtail;
 #endif
+    int clipboard_ctrlshiftins, clipboard_ctrlshiftcv;
     int font_width, font_height;
     int width, height;
     int ignore_sbar;
@@ -138,6 +168,9 @@ struct gui_data {
     int cursor_type;
     int drawtype;
     int meta_mod_mask;
+#ifdef OSX_META_KEY_CONFIG
+    int system_mod_mask;
+#endif
 };
 
 static void cache_conf_values(struct gui_data *inst)
@@ -151,6 +184,7 @@ static void cache_conf_values(struct gui_data *inst)
         inst->meta_mod_mask |= GDK_MOD1_MASK;
     if (conf_get_int(inst->conf, CONF_osx_command_meta))
         inst->meta_mod_mask |= GDK_MOD2_MASK;
+    inst->system_mod_mask = GDK_MOD2_MASK & ~inst->meta_mod_mask;
 #else
     inst->meta_mod_mask = GDK_MOD1_MASK;
 #endif
@@ -750,6 +784,11 @@ gint key_event(GtkWidget *widget, GdkEventKey *event, gpointer data)
     int ucsval, start, end, special, output_charset, use_ucsoutput;
     int nethack_mode, app_keypad_mode;
 
+#ifdef OSX_META_KEY_CONFIG
+    if (event->state & inst->system_mod_mask)
+        return FALSE;                  /* let GTK process OS X Command key */
+#endif
+
     /* Remember the timestamp. */
     inst->input_event_time = event->time;
 
@@ -1015,15 +1054,126 @@ gint key_event(GtkWidget *widget, GdkEventKey *event, gpointer data)
 	}
 
 	/*
-	 * Neither does Shift-Ins.
+	 * Neither do Shift-Ins or Ctrl-Ins (if enabled).
 	 */
 	if (event->keyval == GDK_KEY_Insert &&
             (event->state & GDK_SHIFT_MASK)) {
+            int cfgval = conf_get_int(inst->conf, CONF_ctrlshiftins);
+
+            switch (cfgval) {
+              case CLIPUI_IMPLICIT:
 #ifdef KEY_EVENT_DIAGNOSTICS
-            debug((" - Shift-Insert paste\n"));
+                debug((" - Shift-Insert: paste from PRIMARY\n"));
 #endif
-	    request_paste(inst);
-	    return TRUE;
+                term_request_paste(inst->term, CLIP_PRIMARY);
+                return TRUE;
+              case CLIPUI_EXPLICIT:
+#ifdef KEY_EVENT_DIAGNOSTICS
+                debug((" - Shift-Insert: paste from CLIPBOARD\n"));
+#endif
+                term_request_paste(inst->term, CLIP_CLIPBOARD);
+                return TRUE;
+              case CLIPUI_CUSTOM:
+#ifdef KEY_EVENT_DIAGNOSTICS
+                debug((" - Shift-Insert: paste from custom clipboard\n"));
+#endif
+                term_request_paste(inst->term, inst->clipboard_ctrlshiftins);
+                return TRUE;
+              default:
+#ifdef KEY_EVENT_DIAGNOSTICS
+                debug((" - Shift-Insert: no paste action\n"));
+#endif
+                break;
+            }
+	}
+	if (event->keyval == GDK_KEY_Insert &&
+            (event->state & GDK_CONTROL_MASK)) {
+            static const int clips_clipboard[] = { CLIP_CLIPBOARD };
+            int cfgval = conf_get_int(inst->conf, CONF_ctrlshiftins);
+
+            switch (cfgval) {
+              case CLIPUI_IMPLICIT:
+                /* do nothing; re-copy to PRIMARY is not needed */
+#ifdef KEY_EVENT_DIAGNOSTICS
+                debug((" - Ctrl-Insert: non-copy to PRIMARY\n"));
+#endif
+                return TRUE;
+              case CLIPUI_EXPLICIT:
+#ifdef KEY_EVENT_DIAGNOSTICS
+                debug((" - Ctrl-Insert: copy to CLIPBOARD\n"));
+#endif
+                term_request_copy(inst->term,
+                                  clips_clipboard, lenof(clips_clipboard));
+                return TRUE;
+              case CLIPUI_CUSTOM:
+#ifdef KEY_EVENT_DIAGNOSTICS
+                debug((" - Ctrl-Insert: copy to custom clipboard\n"));
+#endif
+                term_request_copy(inst->term,
+                                  &inst->clipboard_ctrlshiftins, 1);
+                return TRUE;
+              default:
+#ifdef KEY_EVENT_DIAGNOSTICS
+                debug((" - Ctrl-Insert: no copy action\n"));
+#endif
+                break;
+            }
+	}
+
+        /*
+         * Another pair of copy-paste keys.
+         */
+	if ((event->state & GDK_SHIFT_MASK) &&
+            (event->state & GDK_CONTROL_MASK) &&
+            (event->keyval == GDK_KEY_C || event->keyval == GDK_KEY_c ||
+             event->keyval == GDK_KEY_V || event->keyval == GDK_KEY_v)) {
+            int cfgval = conf_get_int(inst->conf, CONF_ctrlshiftcv);
+            int paste = (event->keyval == GDK_KEY_V ||
+                         event->keyval == GDK_KEY_v);
+
+            switch (cfgval) {
+              case CLIPUI_IMPLICIT:
+                if (paste) {
+#ifdef KEY_EVENT_DIAGNOSTICS
+                    debug((" - Ctrl-Shift-V: paste from PRIMARY\n"));
+#endif
+                    term_request_paste(inst->term, CLIP_PRIMARY);
+                } else {
+#ifdef KEY_EVENT_DIAGNOSTICS
+                    debug((" - Ctrl-Shift-C: non-copy to PRIMARY\n"));
+#endif
+                }
+                return TRUE;
+              case CLIPUI_EXPLICIT:
+                if (paste) {
+#ifdef KEY_EVENT_DIAGNOSTICS
+                    debug((" - Ctrl-Shift-V: paste from CLIPBOARD\n"));
+#endif
+                    term_request_paste(inst->term, CLIP_CLIPBOARD);
+                } else {
+                    static const int clips[] = { CLIP_CLIPBOARD };
+#ifdef KEY_EVENT_DIAGNOSTICS
+                    debug((" - Ctrl-Shift-C: copy to CLIPBOARD\n"));
+#endif
+                    term_request_copy(inst->term, clips, lenof(clips));
+                }
+                return TRUE;
+              case CLIPUI_CUSTOM:
+                if (paste) {
+#ifdef KEY_EVENT_DIAGNOSTICS
+                    debug((" - Ctrl-Shift-V: paste from custom clipboard\n"));
+#endif
+                    term_request_paste(inst->term,
+                                       inst->clipboard_ctrlshiftcv);
+                } else {
+#ifdef KEY_EVENT_DIAGNOSTICS
+                    debug((" - Ctrl-Shift-C: copy to custom clipboard\n"));
+#endif
+                    term_request_copy(inst->term,
+                                      &inst->clipboard_ctrlshiftcv, 1);
+                }
+                return TRUE;
+            }
 	}
 
 	special = FALSE;
@@ -2179,6 +2329,21 @@ static void delete_inst(struct gui_data *inst)
         inst->logctx = NULL;
     }
 
+#ifdef JUST_USE_GTK_CLIPBOARD_UTF8
+    /*
+     * Clear up any in-flight clipboard_data_instances. We can't
+     * actually _free_ them, but we detach them from the inst that's
+     * about to be destroyed.
+     */
+    while (inst->cdi_headtail.next != &inst->cdi_headtail) {
+        struct clipboard_data_instance *cdi = inst->cdi_headtail.next;
+        cdi->state = NULL;
+        cdi->next->prev = cdi->prev;
+        cdi->prev->next = cdi->next;
+        cdi->next = cdi->prev = cdi;
+    }
+#endif
+
     /*
      * Delete any top-level callbacks associated with inst, which
      * would otherwise become stale-pointer dereferences waiting to
@@ -2481,6 +2646,20 @@ void palette_reset(void *frontend)
     }
 }
 
+static struct clipboard_state *clipboard_from_atom(
+    struct gui_data *inst, GdkAtom atom)
+{
+    int i;
+
+    for (i = 0; i < N_CLIPBOARDS; i++) {
+        struct clipboard_state *state = &inst->clipstates[i];
+        if (state->inst == inst && state->atom == atom)
+            return state;
+    }
+
+    return NULL;
+}
+
 #ifdef JUST_USE_GTK_CLIPBOARD_UTF8
 
 /* ----------------------------------------------------------------------
@@ -2490,26 +2669,29 @@ void palette_reset(void *frontend)
  * formats it feels like.
  */
 
-void init_clipboard(struct gui_data *inst)
+void set_clipboard_atom(struct gui_data *inst, int clipboard, GdkAtom atom)
 {
-    inst->clipboard = gtk_clipboard_get_for_display(gdk_display_get_default(),
-                                                    DEFAULT_CLIPBOARD);
+    struct clipboard_state *state = &inst->clipstates[clipboard];
+
+    state->inst = inst;
+    state->clipboard = clipboard;
+    state->atom = atom;
+
+    if (state->atom != GDK_NONE) {
+        state->gtkclipboard = gtk_clipboard_get_for_display(
+            gdk_display_get_default(), state->atom);
+        g_object_set_data(G_OBJECT(state->gtkclipboard), "user-data", state);
+    } else {
+        state->gtkclipboard = NULL;
+    }
 }
 
-/*
- * Because calling gtk_clipboard_set_with_data triggers a call to the
- * clipboard_clear function from the last time, we need to arrange a
- * way to distinguish a real call to clipboard_clear for the _new_
- * instance of the clipboard data from the leftover call for the
- * outgoing one. We do this by setting the user data field in our
- * gtk_clipboard_set_with_data() call, instead of the obvious pointer
- * to 'inst', to one of these.
- */
-struct clipboard_data_instance {
-    struct gui_data *inst;
-    char *pasteout_data_utf8;
-    int pasteout_data_utf8_len;
-};
+int init_clipboard(struct gui_data *inst)
+{
+    set_clipboard_atom(inst, CLIP_PRIMARY, GDK_SELECTION_PRIMARY);
+    set_clipboard_atom(inst, CLIP_CLIPBOARD, GDK_SELECTION_CLIPBOARD);
+    return TRUE;
+}
 
 static void clipboard_provide_data(GtkClipboard *clipboard,
                                    GtkSelectionData *selection_data,
@@ -2517,9 +2699,8 @@ static void clipboard_provide_data(GtkClipboard *clipboard,
 {
     struct clipboard_data_instance *cdi =
         (struct clipboard_data_instance *)data;
-    struct gui_data *inst = cdi->inst;
 
-    if (inst->current_cdi == cdi) {
+    if (cdi->state && cdi->state->current_cdi == cdi) {
         gtk_selection_data_set_text(selection_data, cdi->pasteout_data_utf8,
                                     cdi->pasteout_data_utf8_len);
     }
@@ -2529,20 +2710,26 @@ static void clipboard_clear(GtkClipboard *clipboard, gpointer data)
 {
     struct clipboard_data_instance *cdi =
         (struct clipboard_data_instance *)data;
-    struct gui_data *inst = cdi->inst;
 
-    if (inst->current_cdi == cdi) {
-        term_deselect(inst->term);
-        inst->current_cdi = NULL;
+    if (cdi->state && cdi->state->current_cdi == cdi) {
+        if (cdi->state->inst && cdi->state->inst->term) {
+            term_lost_clipboard_ownership(cdi->state->inst->term,
+                                          cdi->state->clipboard);
+        }
+        cdi->state->current_cdi = NULL;
     }
     sfree(cdi->pasteout_data_utf8);
+    cdi->next->prev = cdi->prev;
+    cdi->prev->next = cdi->next;
     sfree(cdi);
 }
 
-void write_clip(void *frontend, wchar_t *data, int *attr, truecolour *truecolour,
-                int len, int must_deselect)
+void write_clip(void *frontend, int clipboard,
+                wchar_t *data, int *attr, truecolour *truecolour, int len,
+                int must_deselect)
 {
     struct gui_data *inst = (struct gui_data *)frontend;
+    struct clipboard_state *state = &inst->clipstates[clipboard];
     struct clipboard_data_instance *cdi;
 
     if (inst->direct_to_font) {
@@ -2554,10 +2741,17 @@ void write_clip(void *frontend, wchar_t *data, int *attr, truecolour *truecolour
         return;
     }
 
+    if (!state->gtkclipboard)
+        return;
+
     cdi = snew(struct clipboard_data_instance);
-    cdi->inst = inst;
-    inst->current_cdi = cdi;
+    cdi->state = state;
+    state->current_cdi = cdi;
     cdi->pasteout_data_utf8 = snewn(len*6, char);
+    cdi->prev = inst->cdi_headtail.prev;
+    cdi->next = &inst->cdi_headtail;
+    cdi->next->prev = cdi;
+    cdi->prev->next = cdi;
     {
         const wchar_t *tmp = data;
         int tmplen = len;
@@ -2580,9 +2774,9 @@ void write_clip(void *frontend, wchar_t *data, int *attr, truecolour *truecolour
         targetlist = gtk_target_list_new(NULL, 0);
         gtk_target_list_add_text_targets(targetlist, 0);
         targettable = gtk_target_table_new_from_list(targetlist, &n_targets);
-        gtk_clipboard_set_with_data(inst->clipboard, targettable, n_targets,
-                                    clipboard_provide_data, clipboard_clear,
-                                    cdi);
+        gtk_clipboard_set_with_data(state->gtkclipboard, targettable,
+                                    n_targets, clipboard_provide_data,
+                                    clipboard_clear, cdi);
         gtk_target_table_free(targettable, n_targets);
         gtk_target_list_unref(targetlist);
     }
@@ -2609,10 +2803,16 @@ static void clipboard_text_received(GtkClipboard *clipboard,
     sfree(paste);
 }
 
-void request_paste(void *frontend)
+void frontend_request_paste(void *frontend, int clipboard)
 {
     struct gui_data *inst = (struct gui_data *)frontend;
-    gtk_clipboard_request_text(inst->clipboard, clipboard_text_received, inst);
+    struct clipboard_state *state = &inst->clipstates[clipboard];
+
+    if (!state->gtkclipboard)
+        return;
+
+    gtk_clipboard_request_text(state->gtkclipboard,
+                               clipboard_text_received, inst);
 }
 
 #else /* JUST_USE_GTK_CLIPBOARD_UTF8 */
@@ -2667,16 +2867,19 @@ static char *retrieve_cutbuffer(int *nbytes)
 #endif
 }
 
-void write_clip(void *frontend, wchar_t *data, int *attr, truecolour *truecolour,
-                int len, int must_deselect)
+void write_clip(void *frontend, int clipboard,
+                wchar_t *data, int *attr, truecolour *truecolour, int len,
+                int must_deselect)
 {
     struct gui_data *inst = (struct gui_data *)frontend;
-    if (inst->pasteout_data)
-	sfree(inst->pasteout_data);
-    if (inst->pasteout_data_ctext)
-	sfree(inst->pasteout_data_ctext);
-    if (inst->pasteout_data_utf8)
-	sfree(inst->pasteout_data_utf8);
+    struct clipboard_state *state = &inst->clipstates[clipboard];
+
+    if (state->pasteout_data)
+	sfree(state->pasteout_data);
+    if (state->pasteout_data_ctext)
+	sfree(state->pasteout_data_ctext);
+    if (state->pasteout_data_utf8)
+	sfree(state->pasteout_data_utf8);
 
     /*
      * Set up UTF-8 and compound text paste data. This only happens
@@ -2691,79 +2894,81 @@ void write_clip(void *frontend, wchar_t *data, int *attr, truecolour *truecolour
         Display *disp = GDK_DISPLAY_XDISPLAY(gdk_display_get_default());
 #endif
 
-	inst->pasteout_data_utf8 = snewn(len*6, char);
-	inst->pasteout_data_utf8_len = len*6;
-	inst->pasteout_data_utf8_len =
-	    charset_from_unicode(&tmp, &tmplen, inst->pasteout_data_utf8,
-				 inst->pasteout_data_utf8_len,
+	state->pasteout_data_utf8 = snewn(len*6, char);
+	state->pasteout_data_utf8_len = len*6;
+	state->pasteout_data_utf8_len =
+	    charset_from_unicode(&tmp, &tmplen, state->pasteout_data_utf8,
+				 state->pasteout_data_utf8_len,
 				 CS_UTF8, NULL, NULL, 0);
-	if (inst->pasteout_data_utf8_len == 0) {
-	    sfree(inst->pasteout_data_utf8);
-	    inst->pasteout_data_utf8 = NULL;
+	if (state->pasteout_data_utf8_len == 0) {
+	    sfree(state->pasteout_data_utf8);
+	    state->pasteout_data_utf8 = NULL;
 	} else {
-	    inst->pasteout_data_utf8 =
-		sresize(inst->pasteout_data_utf8,
-			inst->pasteout_data_utf8_len + 1, char);
-	    inst->pasteout_data_utf8[inst->pasteout_data_utf8_len] = '\0';
+	    state->pasteout_data_utf8 =
+		sresize(state->pasteout_data_utf8,
+			state->pasteout_data_utf8_len + 1, char);
+	    state->pasteout_data_utf8[state->pasteout_data_utf8_len] = '\0';
 	}
 
 	/*
 	 * Now let Xlib convert our UTF-8 data into compound text.
 	 */
 #ifndef NOT_X_WINDOWS
-	list[0] = inst->pasteout_data_utf8;
+	list[0] = state->pasteout_data_utf8;
 	if (Xutf8TextListToTextProperty(disp, list, 1,
 					XCompoundTextStyle, &tp) == 0) {
-	    inst->pasteout_data_ctext = snewn(tp.nitems+1, char);
-	    memcpy(inst->pasteout_data_ctext, tp.value, tp.nitems);
-	    inst->pasteout_data_ctext_len = tp.nitems;
+	    state->pasteout_data_ctext = snewn(tp.nitems+1, char);
+	    memcpy(state->pasteout_data_ctext, tp.value, tp.nitems);
+	    state->pasteout_data_ctext_len = tp.nitems;
 	    XFree(tp.value);
 	} else
 #endif
         {
-            inst->pasteout_data_ctext = NULL;
-            inst->pasteout_data_ctext_len = 0;
+            state->pasteout_data_ctext = NULL;
+            state->pasteout_data_ctext_len = 0;
         }
     } else {
-	inst->pasteout_data_utf8 = NULL;
-	inst->pasteout_data_utf8_len = 0;
-	inst->pasteout_data_ctext = NULL;
-	inst->pasteout_data_ctext_len = 0;
+	state->pasteout_data_utf8 = NULL;
+	state->pasteout_data_utf8_len = 0;
+	state->pasteout_data_ctext = NULL;
+	state->pasteout_data_ctext_len = 0;
     }
 
-    inst->pasteout_data = snewn(len*6, char);
-    inst->pasteout_data_len = len*6;
-    inst->pasteout_data_len = wc_to_mb(inst->ucsdata.line_codepage, 0,
-				       data, len, inst->pasteout_data,
-				       inst->pasteout_data_len,
+    state->pasteout_data = snewn(len*6, char);
+    state->pasteout_data_len = len*6;
+    state->pasteout_data_len = wc_to_mb(inst->ucsdata.line_codepage, 0,
+				       data, len, state->pasteout_data,
+				       state->pasteout_data_len,
 				       NULL, NULL, NULL);
-    if (inst->pasteout_data_len == 0) {
-	sfree(inst->pasteout_data);
-	inst->pasteout_data = NULL;
+    if (state->pasteout_data_len == 0) {
+	sfree(state->pasteout_data);
+	state->pasteout_data = NULL;
     } else {
-	inst->pasteout_data =
-	    sresize(inst->pasteout_data, inst->pasteout_data_len, char);
+	state->pasteout_data =
+	    sresize(state->pasteout_data, state->pasteout_data_len, char);
     }
 
-    store_cutbuffer(inst->pasteout_data, inst->pasteout_data_len);
+    /* The legacy X cut buffers go with PRIMARY, not any other clipboard */
+    if (state->atom == GDK_SELECTION_PRIMARY)
+        store_cutbuffer(state->pasteout_data, state->pasteout_data_len);
 
-    if (gtk_selection_owner_set(inst->area, GDK_SELECTION_PRIMARY,
+    if (gtk_selection_owner_set(inst->area, state->atom,
 				inst->input_event_time)) {
 #if GTK_CHECK_VERSION(2,0,0)
-	gtk_selection_clear_targets(inst->area, GDK_SELECTION_PRIMARY);
+	gtk_selection_clear_targets(inst->area, state->atom);
 #endif
-	gtk_selection_add_target(inst->area, GDK_SELECTION_PRIMARY,
+	gtk_selection_add_target(inst->area, state->atom,
 				 GDK_SELECTION_TYPE_STRING, 1);
-	if (inst->pasteout_data_ctext)
-	    gtk_selection_add_target(inst->area, GDK_SELECTION_PRIMARY,
+	if (state->pasteout_data_ctext)
+	    gtk_selection_add_target(inst->area, state->atom,
 				     compound_text_atom, 1);
-	if (inst->pasteout_data_utf8)
-	    gtk_selection_add_target(inst->area, GDK_SELECTION_PRIMARY,
+	if (state->pasteout_data_utf8)
+	    gtk_selection_add_target(inst->area, state->atom,
 				     utf8_string_atom, 1);
     }
 
     if (must_deselect)
-	term_deselect(inst->term);
+	term_lost_clipboard_ownership(inst->term, clipboard);
 }
 
 static void selection_get(GtkWidget *widget, GtkSelectionData *seldata,
@@ -2771,44 +2976,57 @@ static void selection_get(GtkWidget *widget, GtkSelectionData *seldata,
 {
     struct gui_data *inst = (struct gui_data *)data;
     GdkAtom target = gtk_selection_data_get_target(seldata);
+    struct clipboard_state *state = clipboard_from_atom(
+        inst, gtk_selection_data_get_selection(seldata));
+
+    if (!state)
+        return;
+
     if (target == utf8_string_atom)
 	gtk_selection_data_set(seldata, target, 8,
-                               (unsigned char *)inst->pasteout_data_utf8,
-			       inst->pasteout_data_utf8_len);
+                               (unsigned char *)state->pasteout_data_utf8,
+			       state->pasteout_data_utf8_len);
     else if (target == compound_text_atom)
 	gtk_selection_data_set(seldata, target, 8,
-                               (unsigned char *)inst->pasteout_data_ctext,
-			       inst->pasteout_data_ctext_len);
+                               (unsigned char *)state->pasteout_data_ctext,
+			       state->pasteout_data_ctext_len);
     else
 	gtk_selection_data_set(seldata, target, 8,
-                               (unsigned char *)inst->pasteout_data,
-			       inst->pasteout_data_len);
+                               (unsigned char *)state->pasteout_data,
+			       state->pasteout_data_len);
 }
 
 static gint selection_clear(GtkWidget *widget, GdkEventSelection *seldata,
                             gpointer data)
 {
     struct gui_data *inst = (struct gui_data *)data;
+    struct clipboard_state *state = clipboard_from_atom(
+        inst, seldata->selection);
 
-    term_deselect(inst->term);
-    if (inst->pasteout_data)
-	sfree(inst->pasteout_data);
-    if (inst->pasteout_data_ctext)
-	sfree(inst->pasteout_data_ctext);
-    if (inst->pasteout_data_utf8)
-	sfree(inst->pasteout_data_utf8);
-    inst->pasteout_data = NULL;
-    inst->pasteout_data_len = 0;
-    inst->pasteout_data_ctext = NULL;
-    inst->pasteout_data_ctext_len = 0;
-    inst->pasteout_data_utf8 = NULL;
-    inst->pasteout_data_utf8_len = 0;
+    if (!state)
+        return TRUE;
+
+    term_lost_clipboard_ownership(inst->term, state->clipboard);
+    if (state->pasteout_data)
+	sfree(state->pasteout_data);
+    if (state->pasteout_data_ctext)
+	sfree(state->pasteout_data_ctext);
+    if (state->pasteout_data_utf8)
+	sfree(state->pasteout_data_utf8);
+    state->pasteout_data = NULL;
+    state->pasteout_data_len = 0;
+    state->pasteout_data_ctext = NULL;
+    state->pasteout_data_ctext_len = 0;
+    state->pasteout_data_utf8 = NULL;
+    state->pasteout_data_utf8_len = 0;
     return TRUE;
 }
 
-void request_paste(void *frontend)
+void frontend_request_paste(void *frontend, int clipboard)
 {
     struct gui_data *inst = (struct gui_data *)frontend;
+    struct clipboard_state *state = &inst->clipstates[clipboard];
+
     /*
      * In Unix, pasting is asynchronous: all we can do at the
      * moment is to call gtk_selection_convert(), and when the data
@@ -2823,17 +3041,16 @@ void request_paste(void *frontend)
 	 * fails, selection_received() will be informed and will
 	 * fall back to an ordinary string.
 	 */
-	gtk_selection_convert(inst->area, GDK_SELECTION_PRIMARY,
-			      utf8_string_atom,
+	gtk_selection_convert(inst->area, state->atom, utf8_string_atom,
 			      inst->input_event_time);
     } else {
 	/*
 	 * If we're in direct-to-font mode, we disable UTF-8
 	 * pasting, and go straight to ordinary string data.
 	 */
-	gtk_selection_convert(inst->area, GDK_SELECTION_PRIMARY,
-			      GDK_SELECTION_TYPE_STRING,
-			      inst->input_event_time);
+	gtk_selection_convert(inst->area, state->atom,
+                              GDK_SELECTION_TYPE_STRING,
+                              inst->input_event_time);
     }
 }
 
@@ -2855,13 +3072,18 @@ static void selection_received(GtkWidget *widget, GtkSelectionData *seldata,
     gint seldata_length = gtk_selection_data_get_length(seldata);
     wchar_t *paste;
     int paste_len;
+    struct clipboard_state *state = clipboard_from_atom(
+        inst, gtk_selection_data_get_selection(seldata));
+
+    if (!state)
+        return;
 
     if (seldata_target == utf8_string_atom && seldata_length <= 0) {
 	/*
 	 * Failed to get a UTF-8 selection string. Try compound
 	 * text next.
 	 */
-	gtk_selection_convert(inst->area, GDK_SELECTION_PRIMARY,
+	gtk_selection_convert(inst->area, state->atom,
 			      compound_text_atom,
 			      inst->input_event_time);
 	return;
@@ -2872,7 +3094,7 @@ static void selection_received(GtkWidget *widget, GtkSelectionData *seldata,
 	 * Failed to get UTF-8 or compound text. Try an ordinary
 	 * string.
 	 */
-	gtk_selection_convert(inst->area, GDK_SELECTION_PRIMARY,
+	gtk_selection_convert(inst->area, state->atom,
 			      GDK_SELECTION_TYPE_STRING,
 			      inst->input_event_time);
 	return;
@@ -2929,7 +3151,7 @@ static void selection_received(GtkWidget *widget, GtkSelectionData *seldata,
 		/*
 		 * Compound text failed; fall back to STRING.
 		 */
-		gtk_selection_convert(inst->area, GDK_SELECTION_PRIMARY,
+		gtk_selection_convert(inst->area, state->atom,
 				      GDK_SELECTION_TYPE_STRING,
 				      inst->input_event_time);
 		return;
@@ -2955,6 +3177,24 @@ static void selection_received(GtkWidget *widget, GtkSelectionData *seldata,
     if (free_required)
 	XFree(text);
 #endif
+}
+
+static void init_one_clipboard(struct gui_data *inst, int clipboard)
+{
+    struct clipboard_state *state = &inst->clipstates[clipboard];
+
+    state->inst = inst;
+    state->clipboard = clipboard;
+}
+
+void set_clipboard_atom(struct gui_data *inst, int clipboard, GdkAtom atom)
+{
+    struct clipboard_state *state = &inst->clipstates[clipboard];
+
+    state->inst = inst;
+    state->clipboard = clipboard;
+
+    state->atom = atom;
 }
 
 void init_clipboard(struct gui_data *inst)
@@ -2991,6 +3231,11 @@ void init_clipboard(struct gui_data *inst)
     XChangeProperty(disp, GDK_ROOT_WINDOW(),
 		    XA_CUT_BUFFER7, XA_STRING, 8, PropModeAppend, empty, 0);
 #endif
+
+    inst->clipstates[CLIP_PRIMARY].atom = GDK_SELECTION_PRIMARY;
+    inst->clipstates[CLIP_CLIPBOARD].atom = GDK_SELECTION_CLIPBOARD;
+    init_one_clipboard(inst, CLIP_PRIMARY);
+    init_one_clipboard(inst, CLIP_CLIPBOARD);
 
     g_signal_connect(G_OBJECT(inst->area), "selection_received",
                      G_CALLBACK(selection_received), inst);
@@ -4045,10 +4290,24 @@ void reset_terminal_menuitem(GtkMenuItem *item, gpointer data)
 	ldisc_echoedit_update(inst->ldisc);
 }
 
+void copy_clipboard_menuitem(GtkMenuItem *item, gpointer data)
+{
+    struct gui_data *inst = (struct gui_data *)data;
+    static const int clips[] = { MENU_CLIPBOARD };
+    term_request_copy(inst->term, clips, lenof(clips));
+}
+
+void paste_clipboard_menuitem(GtkMenuItem *item, gpointer data)
+{
+    struct gui_data *inst = (struct gui_data *)data;
+    term_request_paste(inst->term, MENU_CLIPBOARD);
+}
+
 void copy_all_menuitem(GtkMenuItem *item, gpointer data)
 {
     struct gui_data *inst = (struct gui_data *)data;
-    term_copyall(inst->term);
+    static const int clips[] = { COPYALL_CLIPBOARDS };
+    term_copyall(inst->term, clips, lenof(clips));
 }
 
 void special_menuitem(GtkMenuItem *item, gpointer data)
@@ -4071,6 +4330,67 @@ void event_log_menuitem(GtkMenuItem *item, gpointer data)
 {
     struct gui_data *inst = (struct gui_data *)data;
     showeventlog(inst->eventlogstuff, inst->window);
+}
+
+void setup_clipboards(struct gui_data *inst, Terminal *term, Conf *conf)
+{
+    assert(term->mouse_select_clipboards[0] == CLIP_LOCAL);
+
+    term->n_mouse_select_clipboards = 1;
+    term->mouse_select_clipboards[
+        term->n_mouse_select_clipboards++] = MOUSE_SELECT_CLIPBOARD;
+
+    if (conf_get_int(conf, CONF_mouseautocopy)) {
+        term->mouse_select_clipboards[
+            term->n_mouse_select_clipboards++] = CLIP_CLIPBOARD;
+    }
+
+    set_clipboard_atom(inst, CLIP_CUSTOM_1, GDK_NONE);
+    set_clipboard_atom(inst, CLIP_CUSTOM_2, GDK_NONE);
+    set_clipboard_atom(inst, CLIP_CUSTOM_3, GDK_NONE);
+
+    switch (conf_get_int(conf, CONF_mousepaste)) {
+      case CLIPUI_IMPLICIT:
+        term->mouse_paste_clipboard = MOUSE_PASTE_CLIPBOARD;
+        break;
+      case CLIPUI_EXPLICIT:
+        term->mouse_paste_clipboard = CLIP_CLIPBOARD;
+        break;
+      case CLIPUI_CUSTOM:
+        term->mouse_paste_clipboard = CLIP_CUSTOM_1;
+        set_clipboard_atom(inst, CLIP_CUSTOM_1,
+                           gdk_atom_intern(
+                               conf_get_str(conf, CONF_mousepaste_custom),
+                               FALSE));
+        break;
+      default:
+        term->mouse_paste_clipboard = CLIP_NULL;
+        break;
+    }
+
+    if (conf_get_int(conf, CONF_ctrlshiftins) == CLIPUI_CUSTOM) {
+        GdkAtom atom = gdk_atom_intern(
+            conf_get_str(conf, CONF_ctrlshiftins_custom), FALSE);
+        struct clipboard_state *state = clipboard_from_atom(inst, atom);
+        if (state) {
+            inst->clipboard_ctrlshiftins = state->clipboard;
+        } else {
+            inst->clipboard_ctrlshiftins = CLIP_CUSTOM_2;
+            set_clipboard_atom(inst, CLIP_CUSTOM_2, atom);
+        }
+    }
+
+    if (conf_get_int(conf, CONF_ctrlshiftcv) == CLIPUI_CUSTOM) {
+        GdkAtom atom = gdk_atom_intern(
+            conf_get_str(conf, CONF_ctrlshiftcv_custom), FALSE);
+        struct clipboard_state *state = clipboard_from_atom(inst, atom);
+        if (state) {
+            inst->clipboard_ctrlshiftins = state->clipboard;
+        } else {
+            inst->clipboard_ctrlshiftcv = CLIP_CUSTOM_3;
+            set_clipboard_atom(inst, CLIP_CUSTOM_3, atom);
+        }
+    }
 }
 
 struct after_change_settings_dialog_ctx {
@@ -4147,6 +4467,7 @@ static void after_change_settings_dialog(void *vctx, int retval)
         }
         /* Pass new config data to the terminal */
         term_reconfig(inst->term, inst->conf);
+        setup_clipboards(inst, inst->term, inst->conf);
         /* Pass new config data to the back end */
         if (inst->back)
 	    inst->back->reconfig(inst->backhandle, inst->conf);
@@ -4388,6 +4709,40 @@ void saved_session_freedata(GtkMenuItem *item, gpointer data)
     sfree(str);
 }
 
+void app_menu_action(void *frontend, enum MenuAction action)
+{
+    struct gui_data *inst = (struct gui_data *)frontend;
+    switch (action) {
+      case MA_COPY:
+        copy_clipboard_menuitem(NULL, inst);
+        break;
+      case MA_PASTE:
+        paste_clipboard_menuitem(NULL, inst);
+        break;
+      case MA_COPY_ALL:
+        copy_all_menuitem(NULL, inst);
+        break;
+      case MA_DUPLICATE_SESSION:
+        dup_session_menuitem(NULL, inst);
+        break;
+      case MA_RESTART_SESSION:
+        restart_session_menuitem(NULL, inst);
+        break;
+      case MA_CHANGE_SETTINGS:
+        change_settings_menuitem(NULL, inst);
+        break;
+      case MA_CLEAR_SCROLLBACK:
+        clear_scrollback_menuitem(NULL, inst);
+        break;
+      case MA_RESET_TERMINAL:
+        reset_terminal_menuitem(NULL, inst);
+        break;
+      case MA_EVENT_LOG:
+        event_log_menuitem(NULL, inst);
+        break;
+    }
+}
+
 static void update_savedsess_menu(GtkMenuItem *menuitem, gpointer data)
 {
     struct gui_data *inst = (struct gui_data *)data;
@@ -4608,6 +4963,9 @@ void new_session_window(Conf *conf, const char *geometry_string)
      */
     inst = snew(struct gui_data);
     memset(inst, 0, sizeof(*inst));
+#ifdef JUST_USE_GTK_CLIPBOARD_UTF8
+    inst->cdi_headtail.next = inst->cdi_headtail.prev = &inst->cdi_headtail;
+#endif
     inst->alt_keycode = -1;            /* this one needs _not_ to be zero */
     inst->busy_status = BUSY_NOT;
     inst->conf = conf;
@@ -4902,6 +5260,11 @@ void new_session_window(Conf *conf, const char *geometry_string)
 	gtk_widget_hide(inst->specialsitem2);
 	MKMENUITEM("Clear Scrollback", clear_scrollback_menuitem);
 	MKMENUITEM("Reset Terminal", reset_terminal_menuitem);
+	MKSEP();
+	MKMENUITEM("Copy to " CLIPNAME_EXPLICIT_OBJECT,
+                   copy_clipboard_menuitem);
+	MKMENUITEM("Paste from " CLIPNAME_EXPLICIT_OBJECT,
+                   paste_clipboard_menuitem);
 	MKMENUITEM("Copy All", copy_all_menuitem);
 	MKSEP();
 	s = dupcat("About ", appname, NULL);
@@ -4922,6 +5285,7 @@ void new_session_window(Conf *conf, const char *geometry_string)
     inst->eventlogstuff = eventlogstuff_new();
 
     inst->term = term_init(inst->conf, &inst->ucsdata, inst);
+    setup_clipboards(inst, inst->term, inst->conf);
     inst->logctx = log_init(inst, inst->conf);
     term_provide_logctx(inst->term, inst->logctx);
 

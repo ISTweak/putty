@@ -328,6 +328,15 @@ struct terminal_tag {
     int scroll_on_key;
     int xterm_256_colour;
     int true_colour;
+
+    wchar_t *last_selected_text;
+    int *last_selected_attr;
+    truecolour *last_selected_tc;
+    size_t last_selected_len;
+    int mouse_select_clipboards[N_CLIPBOARDS];
+    int n_mouse_select_clipboards;
+    int mouse_paste_clipboard;
+
     /* Hyperlink */
     int url_enable;
     int url_ctrl_click;
