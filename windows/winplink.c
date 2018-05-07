@@ -345,6 +345,7 @@ int main(int argc, char **argv)
 		conf_set_int(conf, CONF_port, default_port);
 	    }
 	}
+    }
     if (argc > 2 && !strcmp(argv[1], "-ini") && *(argv[2]) != '\0') {
         char* dummy;
         DWORD attributes;

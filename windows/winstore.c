@@ -309,6 +309,7 @@ FontSpec *read_setting_fontspec(void *handle, const char *name)
     char *fontname;
     FontSpec *ret;
     int isbold, height, charset;
+    FontSpec *f;
 
     fontname = read_setting_s(handle, name);
     if (!fontname)
@@ -527,12 +528,12 @@ int verify_host_key(const char *hostname, int port,
      * Now read a saved key in from the registry and see what it
      * says.
      */
-    otherstr = snewn(len + 1, char);
     regname = snewn(3 * (strlen(hostname) + strlen(keytype)) + 15, char);
 
     hostkey_regname(regname, hostname, port, keytype);
 
     if (get_use_inifile()) {
+        otherstr = snewn(len + 1, char);
         if (GetPrivateProfileString("SshHostKeys", regname, "\n:", otherstr, len + 1, inifile) == (DWORD) len)
             ret = ERROR_MORE_DATA;
         else if (otherstr[0] == '\n')

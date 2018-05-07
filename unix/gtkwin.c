@@ -51,6 +51,11 @@
 #define NALLCOLOURS (NCFGCOLOURS + NEXTCOLOURS)
 
 GdkAtom compound_text_atom, utf8_string_atom;
+GdkAtom clipboard_atom
+#if GTK_CHECK_VERSION(2,0,0) /* GTK1 will have to fill this in at startup */
+    = GDK_SELECTION_CLIPBOARD
+#endif
+    ;
 
 #ifdef JUST_USE_GTK_CLIPBOARD_UTF8
 /*
@@ -86,6 +91,7 @@ struct clipboard_state {
 struct gui_data {
     GtkWidget *window, *area, *sbar;
     gboolean sbar_visible;
+    gboolean area_configured;
     GtkBox *hbox;
     GtkAdjustment *sbar_adjust;
     GtkWidget *menu, *specialsmenu, *specialsitem1, *specialsitem2,
@@ -639,6 +645,16 @@ gint configure_area(GtkWidget *widget, GdkEventConfigure *event, gpointer data)
 	conf_set_int(inst->conf, CONF_height, inst->height);
 	need_size = 1;
     }
+
+    /*
+     * If the terminal size hasn't changed since the previous call to
+     * this function (in particular, if there has at least _been_ a
+     * previous call to this function), then, we can assume this event
+     * is spurious and do nothing further.
+     */
+    if (!need_size && inst->area_configured)
+        return TRUE;
+    inst->area_configured = TRUE;
 
     {
         int backing_w = w * inst->font_width + 2*inst->window_border;
@@ -2689,7 +2705,7 @@ void set_clipboard_atom(struct gui_data *inst, int clipboard, GdkAtom atom)
 int init_clipboard(struct gui_data *inst)
 {
     set_clipboard_atom(inst, CLIP_PRIMARY, GDK_SELECTION_PRIMARY);
-    set_clipboard_atom(inst, CLIP_CLIPBOARD, GDK_SELECTION_CLIPBOARD);
+    set_clipboard_atom(inst, CLIP_CLIPBOARD, clipboard_atom);
     return TRUE;
 }
 
@@ -3233,7 +3249,7 @@ void init_clipboard(struct gui_data *inst)
 #endif
 
     inst->clipstates[CLIP_PRIMARY].atom = GDK_SELECTION_PRIMARY;
-    inst->clipstates[CLIP_CLIPBOARD].atom = GDK_SELECTION_CLIPBOARD;
+    inst->clipstates[CLIP_CLIPBOARD].atom = clipboard_atom;
     init_one_clipboard(inst, CLIP_PRIMARY);
     init_one_clipboard(inst, CLIP_CLIPBOARD);
 
@@ -3344,7 +3360,7 @@ void sys_cursor(void *frontend, int x, int y)
 void do_beep(void *frontend, int mode)
 {
     if (mode == BELL_DEFAULT)
-	gdk_beep();
+        gdk_display_beep(gdk_display_get_default());
 }
 
 int char_width(Context ctx, int uc)
@@ -4999,6 +5015,8 @@ void new_session_window(Conf *conf, const char *geometry_string)
         compound_text_atom = gdk_atom_intern("COMPOUND_TEXT", FALSE);
     if (!utf8_string_atom)
         utf8_string_atom = gdk_atom_intern("UTF8_STRING", FALSE);
+    if (!clipboard_atom)
+        clipboard_atom = gdk_atom_intern("CLIPBOARD", FALSE);
 
     inst->area = gtk_drawing_area_new();
     gtk_widget_set_name(GTK_WIDGET(inst->area), "drawing-area");

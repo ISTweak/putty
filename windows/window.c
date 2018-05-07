@@ -6755,7 +6755,7 @@ static void bg_create()
 			     bgname, "",
 			     WS_POPUP,
 			     0, 0, 0, 0,
-			     NULL, NULL, hinst, NULL);
+			     hwnd, NULL, hinst, NULL);
 
     /*  position */
     GetClientRect(hwnd, &rc);

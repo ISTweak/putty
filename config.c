@@ -1250,7 +1250,7 @@ static void portfwd_handler(union control *ctrl, void *dlg,
 		if (key) {
 		    static const char *const afs = "A46";
 		    static const char *const dirs = "LRD";
-		    char *afp;
+		    const char *afp;
 		    int dir;
 #ifndef NO_IPV6
 		    int idx;
@@ -2000,18 +2000,24 @@ void setup_config_box(struct controlbox *b, int midsession,
                       HELPCTX(selection_clipactions),
                       CONF_ctrlshiftcv, CONF_ctrlshiftcv_custom);
 
-    /*
-     * The Window/Selection/Words panel.
-     */
-    ctrl_settitle(b, "Window/Selection/Words",
-                  "Options controlling word-by-word selection");
+    s = ctrl_getset(b, "Window/Selection", "paste",
+                    "Control pasting of text from clipboard to terminal");
+    ctrl_checkbox(s, "Permit control characters in pasted text",
+                  NO_SHORTCUT, HELPCTX(selection_pastectrl),
+                  conf_checkbox_handler, I(CONF_paste_controls));
 
-    s = ctrl_getset(b, "Window/Selection/Words", "charclass",
+    /*
+     * The Window/Selection/Copy panel.
+     */
+    ctrl_settitle(b, "Window/Selection/Copy",
+                  "Options controlling copying from terminal to clipboard");
+
+    s = ctrl_getset(b, "Window/Selection/Copy", "charclass",
 		    "Classes of character that group together");
     ccd = (struct charclass_data *)
 	ctrl_alloc(b, sizeof(struct charclass_data));
     ccd->listbox = ctrl_listbox(s, "Character classes:", 'e',
-				HELPCTX(selection_charclasses),
+				HELPCTX(copy_charclasses),
 				charclass_handler, P(ccd));
     ccd->listbox->listbox.multisel = 1;
     ccd->listbox->listbox.ncols = 4;
@@ -2022,20 +2028,28 @@ void setup_config_box(struct controlbox *b, int midsession,
     ccd->listbox->listbox.percentages[3] = 40;
     ctrl_columns(s, 2, 67, 33);
     ccd->editbox = ctrl_editbox(s, "Set to class", 't', 50,
-				HELPCTX(selection_charclasses),
+				HELPCTX(copy_charclasses),
 				charclass_handler, P(ccd), P(NULL));
     ccd->editbox->generic.column = 0;
     ccd->button = ctrl_pushbutton(s, "Set", 's',
-				  HELPCTX(selection_charclasses),
+				  HELPCTX(copy_charclasses),
 				  charclass_handler, P(ccd));
     ccd->button->generic.column = 1;
     ctrl_columns(s, 1, 100);
 
-    s = ctrl_getset(b, "Window/Selection", "format",
+    s = ctrl_getset(b, "Window/Selection/Copy", "format",
 		    "Formatting of pasted characters");
     ctrl_editbox(s, "Ignore characters", 'i', 50,
 		 HELPCTX(ignore_chars),
 		 conf_editbox_handler, I(CONF_ignore_chars), I(1));
+
+    s = ctrl_getset(b, "Window/Selection/Copy", "clipboard", "Allowed maximum number of characters");
+    ctrl_editbox(s, "Clipboard modify", 'm', 20,
+		 HELPCTX(no_help),
+		 conf_editbox_handler, I(CONF_clip_modify), I(-1));
+    ctrl_editbox(s, "Clipboard query", 'y', 20,
+		 HELPCTX(no_help),
+		 conf_editbox_handler, I(CONF_clip_query), I(-1));
 
     /*
      * The Window/Colours panel.
@@ -2447,7 +2461,11 @@ void setup_config_box(struct controlbox *b, int midsession,
 	    c = ctrl_draglist(s, "Algorithm selection policy:", 's',
 			      HELPCTX(ssh_kexlist),
 			      kexlist_handler, P(NULL));
-	    c->listbox.height = 5;
+            c->listbox.height = KEX_MAX;
+	    ctrl_checkbox(s, "Attempt GSSAPI key exchange",
+			  'k', HELPCTX(ssh_gssapi),
+			  conf_checkbox_handler,
+			  I(CONF_try_gssapi_kex));
 
 	    s = ctrl_getset(b, "Connection/SSH/Kex", "repeat",
 			    "Options controlling key re-exchange");
@@ -2457,6 +2475,11 @@ void setup_config_box(struct controlbox *b, int midsession,
 			 conf_editbox_handler,
 			 I(CONF_ssh_rekey_time),
 			 I(-1));
+            ctrl_editbox(s, "Minutes between GSS checks (0 for never)", NO_SHORTCUT, 20,
+                         HELPCTX(ssh_kex_repeat),
+                         conf_editbox_handler,
+                         I(CONF_gssapirekey),
+                         I(-1));
 	    ctrl_editbox(s, "Max data before rekey (0 for no limit)", 'x', 20,
 			 HELPCTX(ssh_kex_repeat),
 			 conf_editbox_handler,
@@ -2604,6 +2627,11 @@ void setup_config_box(struct controlbox *b, int midsession,
 			  't', HELPCTX(ssh_gssapi),
 			  conf_checkbox_handler,
 			  I(CONF_try_gssapi_auth));
+
+	    ctrl_checkbox(s, "Attempt GSSAPI key exchange (SSH-2 only)",
+			  'k', HELPCTX(ssh_gssapi),
+			  conf_checkbox_handler,
+			  I(CONF_try_gssapi_kex));
 
 	    ctrl_checkbox(s, "Allow GSSAPI credential delegation", 'l',
 			  HELPCTX(ssh_gssapi_delegation),

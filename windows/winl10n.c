@@ -554,7 +554,7 @@ xCreateDialogParamA (HINSTANCE a1, LPCSTR a2, HWND a3, DLGPROC a4, LPARAM a5)
 }
 
 char *
-l10n_dupstr (char *s)
+l10n_dupstr (const char *s)
 {
   char *a = s;
   char b[256];

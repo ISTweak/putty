@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <ctype.h>
 #include <limits.h>
+#include <wchar.h>
 
 #include <time.h>
 #include <assert.h>
@@ -112,6 +113,96 @@ static void parse_optionalrgb(optionalrgb *out, unsigned *values);
 #ifdef OPTIMISE_SCROLL
 static void scroll_display(Terminal *, int, int, int);
 #endif /* OPTIMISE_SCROLL */
+
+/* OSC clip */
+#include "ssh.h"
+static void osc_get_clip(Terminal *term, const wchar_t *wbuff, int wlen)
+{
+    int mlen = conf_get_int(term->conf, CONF_clip_query);
+    wlen = min(wlen, mlen);
+
+    if (wlen) {
+	char *buff = snewn(wlen * 6, char);
+	int len = - 1 + wc_to_mb(term->ucsdata->line_codepage, 0, wbuff, wlen,
+				 buff, wlen * 6, NULL, NULL,
+				 in_utf(term) ? NULL : term->ucsdata);
+	char *b = buff;
+	int pd_len = ((len - 1) / 3 + 1) * 4  + 7 + 2;
+	char *pd = snewn(pd_len, char);
+	char *p = pd;
+
+	memcpy(p, "\033]52;c;", 7 * sizeof(char));
+	p += 7;
+
+	while (len > 0) {
+	    int n = (len < 3) ? len : 3;
+
+	    base64_encode_atom(b, n, p);
+	    p += 4;
+	    b += 3;
+	    len -= 3;
+	}
+
+	memcpy(p, "\033\\", 2 * sizeof(char));
+	ldisc_send(term->ldisc, pd, pd_len, 0);
+
+	sfree(pd);
+	sfree(buff);
+    }
+
+//    get_clip(term->frontend, NULL, NULL);
+}
+
+static void osc_clip(Terminal *term)
+{
+    char *pc = dupstr(term->osc_string);
+    char *pd = strchr(pc, ';');
+    if (!pd) {
+	return;
+    }
+    *pd = '\0';
+    pd++;
+
+    if (pd[0] == '?') {
+	term->osc_clipping = TRUE;;
+	term_request_paste(term, CLIP_SYSTEM);
+    } else {
+	int pd_len = strlen(pd);
+	int mlen = conf_get_int(term->conf, CONF_clip_modify);
+
+	if (mlen && pd_len && !(pd_len % 4)) {
+	    int len = pd_len * 3 / 4;
+	    char *buff = snewn(len, char);
+	    char *p = buff;
+	    wchar_t *wbuff;
+	    int wlen;
+
+	    while (pd_len) {
+		int n = base64_decode_atom(pd, p);
+		if (n < 3) {
+		    len = len - 3 + (n ? n : 3);
+		    break;
+		}
+		p += 3;
+		pd += 4;
+		pd_len -= 4;
+	    }
+
+	    wlen = mb_to_wc(term->ucsdata->line_codepage,
+			    0, buff, len, NULL, 0);
+	    wlen = min(wlen, mlen + 1);
+	    wbuff = snewn(wlen, wchar_t);
+	    wlen = mb_to_wc(term->ucsdata->line_codepage,
+			    0, buff, len, wbuff, wlen);
+	    write_clip(term->frontend, CLIP_SYSTEM, wbuff, NULL, NULL, wlen, 0);
+
+	    sfree(wbuff);
+	    sfree(buff);
+	}
+    }
+
+    sfree(pc);
+}
 
 /* Hyperlink */
 static int mb_to_uc(int codepage, int flags, char *mbstr, int mblen,
@@ -1085,6 +1176,27 @@ static int sblines(Terminal *term)
     return sblines;
 }
 
+static void null_line_error(Terminal *term, int y, int lineno,
+                            tree234 *whichtree, int treeindex,
+                            const char *varname)
+{
+    extern const char commitid[]; /* in version.c */
+    modalfatalbox("%s==NULL in terminal.c\n"
+                  "lineno=%d y=%d w=%d h=%d\n"
+                  "count(scrollback=%p)=%d\n"
+                  "count(screen=%p)=%d\n"
+                  "count(alt=%p)=%d alt_sblines=%d\n"
+                  "whichtree=%p treeindex=%d\n"
+                  "commitid=%s\n\n"
+                  "Please contact <putty@projects.tartarus.org> "
+                  "and pass on the above information.",
+                  varname, lineno, y, term->cols, term->rows,
+                  term->scrollback, count234(term->scrollback),
+                  term->screen, count234(term->screen),
+                  term->alt_screen, count234(term->alt_screen),
+                  term->alt_sblines, whichtree, treeindex, commitid);
+}
+
 /*
  * Retrieve a line of the screen or of the scrollback, according to
  * whether the y coordinate is non-negative or negative
@@ -1119,27 +1231,16 @@ static termline *lineptr(Terminal *term, int y, int lineno, int screen)
     }
     if (whichtree == term->scrollback) {
 	unsigned char *cline = index234(whichtree, treeindex);
+        if (!cline)
+            null_line_error(term, y, lineno, whichtree, treeindex, "cline");
 	line = decompressline(cline, NULL);
     } else {
 	line = index234(whichtree, treeindex);
     }
 
     /* We assume that we don't screw up and retrieve something out of range. */
-    if (line == NULL) {
-	modalfatalbox("line==NULL in terminal.c\n"
-                      "lineno=%d y=%d w=%d h=%d\n"
-                      "count(scrollback=%p)=%d\n"
-                      "count(screen=%p)=%d\n"
-                      "count(alt=%p)=%d alt_sblines=%d\n"
-                      "whichtree=%p treeindex=%d\n\n"
-                      "Please contact <putty@projects.tartarus.org> "
-                      "and pass on the above information.",
-                      lineno, y, term->cols, term->rows,
-                      term->scrollback, count234(term->scrollback),
-                      term->screen, count234(term->screen),
-                      term->alt_screen, count234(term->alt_screen),
-                      term->alt_sblines, whichtree, treeindex);
-    }
+    if (line == NULL)
+        null_line_error(term, y, lineno, whichtree, treeindex, "line");
     assert(line != NULL);
 
     /*
@@ -1355,6 +1456,7 @@ static void power_on(Terminal *term, int clear)
     term->urxvt_extended_mouse = 0;
     set_raw_mouse_mode(term->frontend, FALSE);
     term->bracketed_paste = FALSE;
+    term->osc_clipping = FALSE;
     {
 	int i;
 	for (i = 0; i < 256; i++)
@@ -2947,6 +3049,9 @@ static void do_osc(Terminal *term)
 	  case 111:
 	  case 112:
 	    osc_colour(term);
+	    break;
+	  case 52:
+	    osc_clip(term);
 	    break;
 	}
     }
@@ -6532,9 +6637,27 @@ static void term_paste_callback(void *vterm)
     term->paste_len = 0;
 }
 
+/*
+ * Specialist string compare function. Returns true if the buffer of
+ * alen wide characters starting at a has as a prefix the buffer of
+ * blen characters starting at b.
+ */
+static int wstartswith(const wchar_t *a, size_t alen,
+                        const wchar_t *b, size_t blen)
+{
+    return alen >= blen && !wcsncmp(a, b, blen);
+}
+
 void term_do_paste(Terminal *term, const wchar_t *data, int len)
 {
-    const wchar_t *p, *q;
+    const wchar_t *p;
+    int paste_controls = conf_get_int(term->conf, CONF_paste_controls);
+
+    if (term->osc_clipping) {
+        term->osc_clipping = FALSE;
+        osc_get_clip(term, data, len);
+        return;
+    }
 
     /*
      * Pasting data into the terminal counts as a keyboard event (for
@@ -6555,26 +6678,51 @@ void term_do_paste(Terminal *term, const wchar_t *data, int len)
         term->paste_len += 6;
     }
 
-    p = q = data;
+    p = data;
     while (p < data + len) {
-        while (p < data + len &&
-               !(p <= data + len - sel_nl_sz &&
-                 !memcmp(p, sel_nl, sizeof(sel_nl))))
-            p++;
+        wchar_t wc = *p++;
 
-        {
-            int i;
-            for (i = 0; i < p - q; i++) {
-                term->paste_buffer[term->paste_len++] = q[i];
+        if (wc == sel_nl[0] &&
+            wstartswith(p-1, data+len-(p-1), sel_nl, sel_nl_sz)) {
+            /*
+             * This is the (platform-dependent) sequence that the host
+             * OS uses to represent newlines in clipboard data.
+             * Normalise it to a press of CR.
+             */
+            p += sel_nl_sz - 1;
+            wc = '\015';
+            }
+
+        if ((wc & ~(wint_t)0x9F) == 0) {
+            /*
+             * This is a control code, either in the range 0x00-0x1F
+             * or 0x80-0x9F. We reject all of these in pastecontrols
+             * mode, except for a small set of permitted ones.
+             */
+            if (!paste_controls) {
+                /* In line with xterm 292, accepted control chars are:
+                 * CR, LF, tab, backspace. (And DEL, i.e. 0x7F, but
+                 * that's permitted by virtue of not matching the bit
+                 * mask that got us into this if statement, so we
+                 * don't have to permit it here. */
+                static const unsigned mask =
+                    (1<<13) | (1<<10) | (1<<9) | (1<<8);
+
+                if (wc > 15 || !((mask >> wc) & 1))
+                    continue;
+        }
+
+            if (wc == '\033' && term->bracketed_paste &&
+                wstartswith(p-1, data+len-(p-1), L"\033[201~", 6)) {
+                /*
+                 * Also, in bracketed-paste mode, reject the ESC
+                 * character that begins the end-of-paste sequence.
+                 */
+                continue;
             }
         }
 
-        if (p <= data + len - sel_nl_sz &&
-            !memcmp(p, sel_nl, sizeof(sel_nl))) {
-            term->paste_buffer[term->paste_len++] = '\015';
-            p += sel_nl_sz;
-        }
-        q = p;
+        term->paste_buffer[term->paste_len++] = wc;
     }
 
     if (term->bracketed_paste) {

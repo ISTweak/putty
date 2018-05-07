@@ -7,6 +7,11 @@
 #include <stdlib.h>
 #include "putty.h"
 #include "storage.h"
+#ifndef NO_GSSAPI
+#include "sshgssc.h"
+#include "sshgss.h"
+#endif
+
 
 /* The cipher order given here is the default order. */
 static const struct keyvalwhere ciphernames[] = {
@@ -569,12 +574,14 @@ void save_open_settings(void *sesskey, Conf *conf)
     wprefs(sesskey, "KEX", kexnames, KEX_MAX, conf, CONF_ssh_kexlist);
     wprefs(sesskey, "HostKey", hknames, HK_MAX, conf, CONF_ssh_hklist);
     write_setting_i(sesskey, "RekeyTime", conf_get_int(conf, CONF_ssh_rekey_time));
+    write_setting_i(sesskey, "GssapiRekey", conf_get_int(conf, CONF_gssapirekey));
     write_setting_s(sesskey, "RekeyBytes", conf_get_str(conf, CONF_ssh_rekey_data));
     write_setting_i(sesskey, "SshNoAuth", conf_get_int(conf, CONF_ssh_no_userauth));
     write_setting_i(sesskey, "SshBanner", conf_get_int(conf, CONF_ssh_show_banner));
     write_setting_i(sesskey, "AuthTIS", conf_get_int(conf, CONF_try_tis_auth));
     write_setting_i(sesskey, "AuthKI", conf_get_int(conf, CONF_try_ki_auth));
     write_setting_i(sesskey, "AuthGSSAPI", conf_get_int(conf, CONF_try_gssapi_auth));
+    write_setting_i(sesskey, "AuthGSSAPIKEX", conf_get_int(conf, CONF_try_gssapi_kex));
 #ifndef NO_GSSAPI
     wprefs(sesskey, "GSSLibs", gsslibkeywords, ngsslibs, conf, CONF_ssh_gsslist);
     write_setting_filename(sesskey, "GSSCustom", conf_get_filename(conf, CONF_ssh_gss_custom));
@@ -646,6 +653,8 @@ void save_open_settings(void *sesskey, Conf *conf)
     write_setting_i(sesskey, "CRImpliesLF", conf_get_int(conf, CONF_crhaslf));
     write_setting_i(sesskey, "DisableArabicShaping", conf_get_int(conf, CONF_arabicshaping));
     write_setting_i(sesskey, "DisableBidi", conf_get_int(conf, CONF_bidi));
+    write_setting_i(sesskey, "ClipModify", conf_get_int(conf, CONF_clip_modify));
+    write_setting_i(sesskey, "ClipQuery", conf_get_int(conf, CONF_clip_query));
     write_setting_i(sesskey, "WinNameAlways", conf_get_int(conf, CONF_win_name_always));
     write_setting_s(sesskey, "WinTitle", conf_get_str(conf, CONF_wintitle));
     write_setting_i(sesskey, "TermWidth", conf_get_int(conf, CONF_width));
@@ -673,6 +682,7 @@ void save_open_settings(void *sesskey, Conf *conf)
     write_setting_i(sesskey, "PasteRTF", conf_get_int(conf, CONF_rtf_paste));
     write_setting_i(sesskey, "MouseIsXterm", conf_get_int(conf, CONF_mouse_is_xterm));
     write_setting_i(sesskey, "RectSelect", conf_get_int(conf, CONF_rect_select));
+    write_setting_i(sesskey, "PasteControls", conf_get_int(conf, CONF_paste_controls));
     write_setting_i(sesskey, "MouseOverride", conf_get_int(conf, CONF_mouse_override));
     for (i = 0; i < 256; i += 32) {
 	char buf[20], buf2[256];
@@ -989,12 +999,20 @@ void load_open_settings(void *sesskey, Conf *conf)
 	    sfree(raw);
 	    raw = dupstr(normal_default);
 	}
+	/* (For the record: after 0.70, the default algorithm list
+	 * very briefly contained the string 'gss-sha1-krb5'; this was
+	 * never used in any committed version of code, but was left
+	 * over from a pre-commit version of GSS key exchange.
+	 * Mentioned here as it is remotely possible that it will turn
+	 * up in someone's saved settings in future.) */
+
 	gprefs_from_str(raw, kexnames, KEX_MAX, conf, CONF_ssh_kexlist);
 	sfree(raw);
     }
     gprefs(sesskey, "HostKey", "ed25519,ecdsa,rsa,dsa,WARN",
            hknames, HK_MAX, conf, CONF_ssh_hklist);
     gppi(sesskey, "RekeyTime", 60, conf, CONF_ssh_rekey_time);
+    gppi(sesskey, "GssapiRekey", GSS_DEF_REKEY_MINS, conf, CONF_gssapirekey);
     gpps(sesskey, "RekeyBytes", "1G", conf, CONF_ssh_rekey_data);
     {
 	/* SSH-2 only by default */
@@ -1012,6 +1030,7 @@ void load_open_settings(void *sesskey, Conf *conf)
     gppi(sesskey, "AuthTIS", 0, conf, CONF_try_tis_auth);
     gppi(sesskey, "AuthKI", 1, conf, CONF_try_ki_auth);
     gppi(sesskey, "AuthGSSAPI", 1, conf, CONF_try_gssapi_auth);
+    gppi(sesskey, "AuthGSSAPIKEX", 1, conf, CONF_try_gssapi_kex);
 #ifndef NO_GSSAPI
     gprefs(sesskey, "GSSLibs", "\0",
 	   gsslibkeywords, ngsslibs, conf, CONF_ssh_gsslist);
@@ -1101,6 +1120,8 @@ void load_open_settings(void *sesskey, Conf *conf)
     gppi(sesskey, "CRImpliesLF", 0, conf, CONF_crhaslf);
     gppi(sesskey, "DisableArabicShaping", 0, conf, CONF_arabicshaping);
     gppi(sesskey, "DisableBidi", 0, conf, CONF_bidi);
+    gppi(sesskey, "ClipModify", 0, conf, CONF_clip_modify);
+    gppi(sesskey, "ClipQuery", 0, conf, CONF_clip_query);
     gppi(sesskey, "WinNameAlways", 1, conf, CONF_win_name_always);
     gpps(sesskey, "WinTitle", "", conf, CONF_wintitle);
     gppi(sesskey, "TermWidth", 80, conf, CONF_width);
@@ -1139,6 +1160,7 @@ void load_open_settings(void *sesskey, Conf *conf)
     gppi(sesskey, "PasteRTF", 0, conf, CONF_rtf_paste);
     gppi(sesskey, "MouseIsXterm", 0, conf, CONF_mouse_is_xterm);
     gppi(sesskey, "RectSelect", 0, conf, CONF_rect_select);
+    gppi(sesskey, "PasteControls", 0, conf, CONF_paste_controls);
     gppi(sesskey, "MouseOverride", 1, conf, CONF_mouse_override);
     for (i = 0; i < 256; i += 32) {
 	static const char *const defaults[] = {

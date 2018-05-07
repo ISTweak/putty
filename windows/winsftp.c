@@ -765,6 +765,8 @@ int main(int argc, char *argv[])
 {
     int ret;
 
+    dll_hijacking_protection();
+
     if (argc > 2 && !strcmp(argv[1], "-ini") && *(argv[2]) != '\0') {
         char* dummy;
         DWORD attributes;
@@ -780,9 +782,6 @@ int main(int argc, char *argv[])
             }
         }
     }
-
-    dll_hijacking_protection();
-
     ret = psftp_main(argc, argv);
 
     return ret;

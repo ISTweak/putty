@@ -28,6 +28,13 @@ typedef struct terminal_tag Terminal;
 #include "misc.h"
 
 /*
+ * We express various time intervals in unsigned long minutes, but may need to
+ * clip some values so that the resulting number of ticks does not overflow an
+ * integer value.
+ */
+#define MAX_TICK_MINS	(INT_MAX / (60 * TICKSPERSEC))
+
+/*
  * Fingerprints of the PGP master keys that can be used to establish a trust
  * path between an executable and other files.
  */
@@ -892,8 +899,10 @@ void cleanup_exit(int);
     X(INT, NONE, ssh_show_banner) /* show USERAUTH_BANNERs (SSH-2 only) */ \
     X(INT, NONE, try_tis_auth) \
     X(INT, NONE, try_ki_auth) \
-    X(INT, NONE, try_gssapi_auth) /* attempt gssapi auth */ \
+    X(INT, NONE, try_gssapi_auth) /* attempt gssapi auth via ssh userauth */ \
+    X(INT, NONE, try_gssapi_kex) /* attempt gssapi auth via ssh kex */ \
     X(INT, NONE, gssapifwd) /* forward tgt via gss */ \
+    X(INT, NONE, gssapirekey) /* KEXGSS refresh interval (mins) */ \
     X(INT, INT, ssh_gsslist) /* preference order for local GSS libs */ \
     X(FILENAME, NONE, ssh_gss_custom) \
     X(INT, NONE, ssh_subsys) /* run a subsystem rather than a command */ \
@@ -993,6 +1002,8 @@ void cleanup_exit(int);
     X(STR, NONE, printer) \
     X(INT, NONE, arabicshaping) \
     X(INT, NONE, bidi) \
+    X(INT, NONE, clip_modify) \
+    X(INT, NONE, clip_query) \
     /* Colour options */ \
     X(INT, NONE, ansi_colour) \
     X(INT, NONE, xterm_256_colour) \
@@ -1004,6 +1015,7 @@ void cleanup_exit(int);
     /* Selection options */ \
     X(INT, NONE, mouse_is_xterm) \
     X(INT, NONE, rect_select) \
+    X(INT, NONE, paste_controls) \
     X(INT, NONE, rawcnp) \
     X(INT, NONE, rtf_paste) \
     X(INT, NONE, mouse_override) \
@@ -1625,6 +1637,7 @@ Filename *filename_deserialise(void *data, int maxsize, int *used);
 char *get_username(void);	       /* return value needs freeing */
 char *get_random_data(int bytes, const char *device); /* used in cmdgen.c */
 char filename_char_sanitise(char c);   /* rewrite special pathname chars */
+int open_for_write_would_lose_data(const Filename *fn);
 void exec_browser(char *url);
 
 /*
@@ -1831,7 +1844,7 @@ iso2022_width (struct iso2022_data *this, wchar_t c)
 /*
  * Exports from winl10n.c/uxl10n.c
  */
-char *l10n_dupstr (char *);
+char *l10n_dupstr (const char *);
 int get_l10n_setting(const char* keyname, char* buf, int size);
 
 #endif
